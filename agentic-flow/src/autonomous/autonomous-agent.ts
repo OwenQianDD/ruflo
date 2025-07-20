@@ -1,5 +1,16 @@
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
+import { MessageBus } from '../communication/message-bus';
+import { TeamCoordinator } from '../coordination/team-coordinator';
+import {
+  AgentId,
+  Message,
+  MessageType,
+  MessagePriority,
+  AgentState as AgentStateEnum,
+  Task,
+  TaskStatus
+} from '../types';
 
 export interface Goal {
   id: string;
@@ -58,7 +69,7 @@ export interface DecisionOption {
 }
 
 export class AutonomousAgent extends EventEmitter {
-  public readonly id: string;
+  public readonly agentId: AgentId;
   public readonly name: string;
   public readonly type: string;
   
@@ -71,12 +82,28 @@ export class AutonomousAgent extends EventEmitter {
   private explorationRate: number = 0.2;
   private qTable: Map<string, Map<string, number>> = new Map();
   
+  // Coordination components
+  private messageBus: MessageBus;
+  private teamCoordinator: TeamCoordinator;
+  private currentTasks: Map<string, Task> = new Map();
+  private coordinationContext: Map<string, any> = new Map();
+  private isRegistered: boolean = false;
+  
+  // Get ID for backward compatibility
+  public get id(): string {
+    return this.agentId.id;
+  }
+  
   constructor(id: string, name: string, type: string, initialCapabilities: Capability[] = []) {
     super();
     
-    this.id = id;
+    this.agentId = { id, namespace: 'autonomous' };
     this.name = name;
     this.type = type;
+    
+    // Initialize coordination components
+    this.messageBus = MessageBus.getInstance();
+    this.teamCoordinator = new TeamCoordinator();
     
     // Initialize capabilities
     initialCapabilities.forEach(cap => {
@@ -91,6 +118,9 @@ export class AutonomousAgent extends EventEmitter {
       workload: 0,
       stress: 0
     };
+    
+    // Register with coordination system
+    this.initializeCoordination();
     
     // Start autonomous behavior loop
     this.startAutonomousBehavior();
@@ -602,6 +632,609 @@ export class AutonomousAgent extends EventEmitter {
     // Calculate confidence based on agreement between strategies
     const actions = new Set(decisions.map(d => d.action));
     return 1 - (actions.size - 1) / decisions.length;
+  }
+  
+  // ========================
+  // COORDINATION METHODS
+  // ========================
+  
+  /**
+   * Initialize coordination capabilities
+   */
+  private async initializeCoordination(): Promise<void> {
+    try {
+      // Register with message bus
+      await this.messageBus.registerAgent(this.agentId);
+      
+      // Subscribe to messages
+      this.messageBus.subscribe(this.agentId, this.handleMessage.bind(this));
+      
+      this.isRegistered = true;
+      this.emit('coordination:initialized', { agentId: this.agentId });
+    } catch (error) {
+      console.error('Failed to initialize coordination:', error);
+      this.emit('coordination:error', { error, agentId: this.agentId });
+    }
+  }
+  
+  /**
+   * Handle incoming messages
+   */
+  private async handleMessage(message: Message): Promise<void> {
+    try {
+      this.updateState();
+      
+      switch (message.type) {
+        case MessageType.COMMAND:
+          await this.handleCommand(message);
+          break;
+        case MessageType.REQUEST:
+          await this.handleRequest(message);
+          break;
+        case MessageType.INFORM:
+          await this.handleInform(message);
+          break;
+        case MessageType.QUERY:
+          await this.handleQuery(message);
+          break;
+        case MessageType.NEGOTIATE:
+          await this.handleNegotiation(message);
+          break;
+        default:
+          console.warn(`Unhandled message type: ${message.type}`);
+      }
+      
+      // Send acknowledgment for high priority messages
+      if (message.priority === MessagePriority.URGENT || message.priority === MessagePriority.HIGH) {
+        await this.sendAcknowledgment(message);
+      }
+      
+    } catch (error) {
+      console.error('Error handling message:', error);
+      await this.sendErrorResponse(message, error);
+    }
+  }
+  
+  /**
+   * Handle command messages
+   */
+  private async handleCommand(message: Message): Promise<void> {
+    const { topic, body } = message.content;
+    
+    switch (topic) {
+      case 'task:assignment':
+        await this.handleTaskAssignment(body, message);
+        break;
+      case 'goal:assign':
+        await this.handleGoalAssignment(body, message);
+        break;
+      case 'coordination:join_team':
+        await this.handleJoinTeam(body, message);
+        break;
+      case 'coordination:leave_team':
+        await this.handleLeaveTeam(body, message);
+        break;
+      default:
+        console.warn(`Unhandled command topic: ${topic}`);
+    }
+  }
+  
+  /**
+   * Handle task assignment from coordinator
+   */
+  private async handleTaskAssignment(taskData: any, originalMessage: Message): Promise<void> {
+    const { tasks, goal, strategy } = taskData;
+    
+    for (const taskInfo of tasks) {
+      const task: Task = {
+        id: uuidv4(),
+        goalId: taskInfo.goalId,
+        assignedTo: this.agentId,
+        description: taskInfo.description,
+        status: TaskStatus.ASSIGNED,
+        startedAt: new Date()
+      };
+      
+      this.currentTasks.set(task.id, task);
+      
+      // Start working on the task
+      this.executeTask(task);
+    }
+    
+    // Send acknowledgment
+    await this.sendMessage({
+      to: originalMessage.from,
+      type: MessageType.ACKNOWLEDGE,
+      content: {
+        topic: 'task:accepted',
+        body: { 
+          taskCount: tasks.length,
+          strategy,
+          agentState: this.getCoordinationState()
+        }
+      },
+      priority: MessagePriority.HIGH
+    });
+  }
+  
+  /**
+   * Execute a task with coordination awareness
+   */
+  private async executeTask(task: Task): Promise<void> {
+    try {
+      task.status = TaskStatus.IN_PROGRESS;
+      this.emit('task:started', { task, agentId: this.agentId });
+      
+      // Simulate task execution with real coordination
+      const actions = this.planActions({ 
+        id: task.goalId, 
+        description: task.description,
+        priority: 1,
+        status: 'in-progress',
+        subGoals: [],
+        requirements: [],
+        context: {}
+      });
+      
+      let taskResult = null;
+      for (const action of actions) {
+        // Check if we need coordination for this action
+        if (await this.requiresCoordination(action, task)) {
+          taskResult = await this.coordinateAction(action, task);
+        } else {
+          taskResult = await this.executeAction(action, task);
+        }
+        
+        if (!taskResult.success) {
+          throw new Error(taskResult.error || 'Action failed');
+        }
+      }
+      
+      task.status = TaskStatus.COMPLETED;
+      task.completedAt = new Date();
+      task.result = taskResult;
+      
+      // Report completion to team
+      await this.reportTaskCompletion(task);
+      
+      this.emit('task:completed', { task, agentId: this.agentId });
+      
+    } catch (error) {
+      task.status = TaskStatus.FAILED;
+      task.error = error as Error;
+      task.completedAt = new Date();
+      
+      await this.reportTaskFailure(task, error as Error);
+      this.emit('task:failed', { task, error, agentId: this.agentId });
+    }
+  }
+  
+  /**
+   * Check if an action requires coordination
+   */
+  private async requiresCoordination(action: string, task: Task): Promise<boolean> {
+    // Actions that typically require coordination
+    const coordinationActions = [
+      'gather_information',
+      'design_solution', 
+      'analyze_data',
+      'synthesize_findings'
+    ];
+    
+    return coordinationActions.includes(action) || 
+           this.coordinationContext.has('requires_coordination');
+  }
+  
+  /**
+   * Coordinate an action with other agents
+   */
+  private async coordinateAction(action: string, task: Task): Promise<{ success: boolean; result?: any; error?: string }> {
+    try {
+      // Request coordination from team
+      const coordinationRequest = {
+        action,
+        task: task.id,
+        requiredCapabilities: this.identifyRequiredCapabilities(action),
+        priority: MessagePriority.HIGH
+      };
+      
+      const team = this.teamCoordinator.getAgentTeam(this.agentId);
+      if (!team) {
+        // No team - execute independently
+        return await this.executeAction(action, task);
+      }
+      
+      // Send coordination request to team leader
+      await this.sendMessage({
+        to: team.leader,
+        type: MessageType.REQUEST,
+        content: {
+          topic: 'coordination:request',
+          body: coordinationRequest
+        },
+        priority: MessagePriority.HIGH
+      });
+      
+      // Wait for coordination response (simplified - would use promises/callbacks in real implementation)
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Execute coordinated action
+      const result = await this.executeAction(action, task);
+      
+      // Share results with team
+      await this.shareActionResult(action, task, result);
+      
+      return result;
+      
+    } catch (error) {
+      console.error('Coordination failed:', error);
+      // Fallback to independent execution
+      return await this.executeAction(action, task);
+    }
+  }
+  
+  /**
+   * Execute an action independently
+   */
+  private async executeAction(action: string, task: Task): Promise<{ success: boolean; result?: any; error?: string }> {
+    try {
+      // Simulate action execution
+      const success = Math.random() > 0.2; // 80% success rate
+      const reward = success ? 0.8 : 0.2;
+      
+      await this.learnFromExperience(
+        action,
+        { taskId: task.id, goalId: task.goalId },
+        success ? 'success' : 'failure',
+        reward
+      );
+      
+      return {
+        success,
+        result: success ? { action, outcome: 'completed', reward } : undefined,
+        error: success ? undefined : 'Action execution failed'
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: (error as Error).message
+      };
+    }
+  }
+  
+  /**
+   * Share action results with team
+   */
+  private async shareActionResult(action: string, task: Task, result: any): Promise<void> {
+    const team = this.teamCoordinator.getAgentTeam(this.agentId);
+    if (!team) return;
+    
+    await this.sendMessage({
+      to: team.members.filter(m => m.id !== this.agentId.id),
+      type: MessageType.INFORM,
+      content: {
+        topic: 'action:result',
+        body: {
+          action,
+          taskId: task.id,
+          result,
+          timestamp: new Date(),
+          agentId: this.agentId
+        }
+      },
+      priority: MessagePriority.NORMAL
+    });
+  }
+  
+  /**
+   * Report task completion to coordinator
+   */
+  private async reportTaskCompletion(task: Task): Promise<void> {
+    const team = this.teamCoordinator.getAgentTeam(this.agentId);
+    if (!team) return;
+    
+    await this.sendMessage({
+      to: team.leader,
+      type: MessageType.INFORM,
+      content: {
+        topic: 'task:completed',
+        body: {
+          taskId: task.id,
+          goalId: task.goalId,
+          result: task.result,
+          duration: task.completedAt!.getTime() - task.startedAt!.getTime(),
+          agentId: this.agentId
+        }
+      },
+      priority: MessagePriority.HIGH
+    });
+  }
+  
+  /**
+   * Report task failure to coordinator
+   */
+  private async reportTaskFailure(task: Task, error: Error): Promise<void> {
+    const team = this.teamCoordinator.getAgentTeam(this.agentId);
+    if (!team) return;
+    
+    await this.sendMessage({
+      to: team.leader,
+      type: MessageType.INFORM,
+      content: {
+        topic: 'task:failed',
+        body: {
+          taskId: task.id,
+          goalId: task.goalId,
+          error: error.message,
+          agentId: this.agentId,
+          needsHelp: true
+        }
+      },
+      priority: MessagePriority.URGENT
+    });
+  }
+  
+  /**
+   * Send a message to other agents
+   */
+  public async sendMessage(params: {
+    to: AgentId | AgentId[];
+    type: MessageType;
+    content: { topic: string; body: any };
+    priority?: MessagePriority;
+  }): Promise<void> {
+    if (!this.isRegistered) {
+      throw new Error('Agent not registered with coordination system');
+    }
+    
+    const message: Message = {
+      id: uuidv4(),
+      from: this.agentId,
+      to: params.to,
+      type: params.type,
+      content: params.content,
+      timestamp: new Date(),
+      priority: params.priority || MessagePriority.NORMAL
+    };
+    
+    await this.messageBus.send(message);
+  }
+  
+  /**
+   * Handle other message types
+   */
+  private async handleRequest(message: Message): Promise<void> {
+    const { topic, body } = message.content;
+    
+    switch (topic) {
+      case 'capability:query':
+        await this.respondWithCapabilities(message);
+        break;
+      case 'state:query':
+        await this.respondWithState(message);
+        break;
+      case 'coordination:request':
+        await this.handleCoordinationRequest(body, message);
+        break;
+    }
+  }
+  
+  private async handleInform(message: Message): Promise<void> {
+    const { topic, body } = message.content;
+    
+    switch (topic) {
+      case 'team:created':
+      case 'member:added':
+      case 'member:removed':
+        this.updateCoordinationContext(topic, body);
+        break;
+      case 'action:result':
+        this.processSharedResult(body);
+        break;
+    }
+  }
+  
+  private async handleQuery(message: Message): Promise<void> {
+    // Handle queries about agent status, capabilities, etc.
+    const response = this.processQuery(message.content);
+    
+    await this.sendMessage({
+      to: message.from,
+      type: MessageType.RESPONSE,
+      content: {
+        topic: 'query:response',
+        body: response
+      },
+      priority: message.priority
+    });
+  }
+  
+  private async handleNegotiation(message: Message): Promise<void> {
+    // Handle negotiation messages for resource allocation, task sharing, etc.
+    const negotiationResponse = this.processNegotiation(message.content);
+    
+    await this.sendMessage({
+      to: message.from,
+      type: MessageType.RESPONSE,
+      content: {
+        topic: 'negotiation:response',
+        body: negotiationResponse
+      },
+      priority: message.priority
+    });
+  }
+  
+  /**
+   * Utility methods
+   */
+  private async sendAcknowledgment(message: Message): Promise<void> {
+    await this.sendMessage({
+      to: message.from,
+      type: MessageType.ACKNOWLEDGE,
+      content: {
+        topic: 'message:received',
+        body: { messageId: message.id, receivedAt: new Date() }
+      },
+      priority: MessagePriority.LOW
+    });
+  }
+  
+  private async sendErrorResponse(message: Message, error: any): Promise<void> {
+    await this.sendMessage({
+      to: message.from,
+      type: MessageType.RESPONSE,
+      content: {
+        topic: 'error:processing',
+        body: { 
+          originalMessageId: message.id, 
+          error: error.message,
+          agentId: this.agentId
+        }
+      },
+      priority: MessagePriority.HIGH
+    });
+  }
+  
+  private getCoordinationState(): any {
+    return {
+      agentId: this.agentId,
+      state: this.state,
+      currentTasks: Array.from(this.currentTasks.values()),
+      capabilities: Array.from(this.capabilities.keys()),
+      workload: this.state.workload,
+      availability: this.state.energy > 30 && this.state.stress < 70
+    };
+  }
+  
+  private identifyRequiredCapabilities(action: string): string[] {
+    // Map actions to required capabilities
+    const capabilityMap: Record<string, string[]> = {
+      'gather_information': ['research', 'data_access'],
+      'analyze_data': ['analysis', 'statistics'],
+      'design_solution': ['design', 'architecture'],
+      'write_code': ['programming', 'software_development'],
+      'synthesize_findings': ['synthesis', 'writing']
+    };
+    
+    return capabilityMap[action] || [];
+  }
+  
+  private updateCoordinationContext(topic: string, data: any): void {
+    this.coordinationContext.set(topic, data);
+    this.emit('coordination:context_updated', { topic, data });
+  }
+  
+  private processSharedResult(result: any): void {
+    // Process shared results from other agents
+    this.coordinationContext.set('shared_results', result);
+    this.emit('coordination:result_received', result);
+  }
+  
+  private processQuery(content: any): any {
+    return {
+      agentId: this.agentId,
+      capabilities: Array.from(this.capabilities.keys()),
+      state: this.state,
+      currentGoals: Array.from(this.goals.values()),
+      timestamp: new Date()
+    };
+  }
+  
+  private processNegotiation(content: any): any {
+    // Simple negotiation logic - can be enhanced
+    return {
+      agentId: this.agentId,
+      response: 'accept', // or 'reject', 'counter'
+      terms: content.body,
+      timestamp: new Date()
+    };
+  }
+  
+  
+  private async handleGoalAssignment(body: any, message: Message): Promise<void> {
+    const goal = body.goal;
+    await this.setGoal(goal.description, goal.priority, goal.deadline);
+    
+    await this.sendMessage({
+      to: message.from,
+      type: MessageType.ACKNOWLEDGE,
+      content: {
+        topic: 'goal:accepted',
+        body: { goalId: goal.id, agentId: this.agentId }
+      },
+      priority: MessagePriority.HIGH
+    });
+  }
+  
+  private async handleJoinTeam(body: any, message: Message): Promise<void> {
+    // Logic for joining a team
+    this.emit('coordination:team_joined', { teamId: body.teamId, agentId: this.agentId });
+  }
+  
+  private async handleLeaveTeam(body: any, message: Message): Promise<void> {
+    // Logic for leaving a team
+    this.emit('coordination:team_left', { teamId: body.teamId, agentId: this.agentId });
+  }
+  
+  private async respondWithCapabilities(message: Message): Promise<void> {
+    await this.sendMessage({
+      to: message.from,
+      type: MessageType.RESPONSE,
+      content: {
+        topic: 'capabilities:list',
+        body: {
+          agentId: this.agentId,
+          capabilities: Array.from(this.capabilities.values()),
+          availability: this.getCoordinationState().availability
+        }
+      },
+      priority: message.priority
+    });
+  }
+  
+  private async respondWithState(message: Message): Promise<void> {
+    await this.sendMessage({
+      to: message.from,
+      type: MessageType.RESPONSE,
+      content: {
+        topic: 'state:current',
+        body: this.getCoordinationState()
+      },
+      priority: message.priority
+    });
+  }
+  
+  private async handleCoordinationRequest(body: any, message: Message): Promise<void> {
+    // Handle coordination requests from other agents
+    const response = {
+      approved: this.state.energy > 30,
+      supportOffered: body.requiredCapabilities.filter((cap: string) => 
+        this.capabilities.has(cap)
+      ),
+      agentId: this.agentId
+    };
+    
+    await this.sendMessage({
+      to: message.from,
+      type: MessageType.RESPONSE,
+      content: {
+        topic: 'coordination:response',
+        body: response
+      },
+      priority: message.priority
+    });
+  }
+  
+  /**
+   * Cleanup coordination when agent stops
+   */
+  public async stop(): Promise<void> {
+    if (this.isRegistered) {
+      await this.messageBus.unregisterAgent(this.agentId);
+      this.isRegistered = false;
+    }
+    
+    this.emit('agent:stopped', { agentId: this.agentId });
   }
 
   // Public API

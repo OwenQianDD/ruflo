@@ -193,10 +193,15 @@ export class MessageBus extends EventEmitter {
     };
     
     await this.send(replyMessage);
+    
+    // Emit response event for request-response pattern
+    if (type === MessageType.RESPONSE) {
+      this.emit(`response:${originalMessage.id}`, replyMessage);
+    }
   }
 
   /**
-   * Deliver message to recipient
+   * Enhanced message delivery with coordination tracking
    */
   private async deliverMessage(message: Message, recipient: AgentId): Promise<void> {
     const key = this.getAgentKey(recipient);
@@ -207,6 +212,9 @@ export class MessageBus extends EventEmitter {
       try {
         await handler(message);
         this.emit('message:delivered', { message, recipient });
+        
+        // Also emit the message for coordination patterns
+        this.emit('message:delivered', message);
       } catch (error) {
         this.logger.error('Handler failed to process message', error);
         this.emit('message:handlerError', { message, recipient, error });
@@ -370,5 +378,400 @@ export class MessageBus extends EventEmitter {
    */
   public getRegisteredAgents(): AgentId[] {
     return this.router.getRegisteredAgents();
+  }
+  
+  // ========================
+  // ENHANCED COORDINATION FEATURES
+  // ========================
+  
+  /**
+   * Send request and wait for response
+   */
+  public async sendAndWaitForResponse(
+    message: Message,
+    timeoutMs: number = 30000
+  ): Promise<Message> {
+    return new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        this.removeListener(`response:${message.id}`, responseHandler);
+        reject(new Error(`Response timeout for message ${message.id}`));
+      }, timeoutMs);
+      
+      const responseHandler = (response: Message) => {
+        clearTimeout(timeoutId);
+        resolve(response);
+      };
+      
+      this.once(`response:${message.id}`, responseHandler);
+      
+      this.send(message).catch(error => {
+        clearTimeout(timeoutId);
+        this.removeListener(`response:${message.id}`, responseHandler);
+        reject(error);
+      });
+    });
+  }
+  
+  
+  /**
+   * Coordinate synchronous message exchange between agents
+   */
+  public async coordinatedExchange(
+    initiator: AgentId,
+    participants: AgentId[],
+    topic: string,
+    data: any,
+    timeoutMs: number = 60000
+  ): Promise<Map<string, any>> {
+    const exchangeId = uuidv4();
+    const responses = new Map<string, any>();
+    const pendingResponses = new Set(participants.map(p => this.getAgentKey(p)));
+    
+    return new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        reject(new Error(`Coordinated exchange timeout: ${exchangeId}`));
+      }, timeoutMs);
+      
+      const responseHandler = (message: Message) => {
+        if (message.content.topic === `${topic}:response` && 
+            message.content.body.exchangeId === exchangeId) {
+          const senderKey = this.getAgentKey(message.from);
+          responses.set(senderKey, message.content.body);
+          pendingResponses.delete(senderKey);
+          
+          if (pendingResponses.size === 0) {
+            clearTimeout(timeoutId);
+            this.removeListener('message:delivered', responseHandler);
+            resolve(responses);
+          }
+        }
+      };
+      
+      this.on('message:delivered', responseHandler);
+      
+      // Send coordination message to all participants
+      const coordinationMessage: Message = {
+        id: uuidv4(),
+        from: initiator,
+        to: participants,
+        type: MessageType.REQUEST,
+        content: {
+          topic,
+          body: {
+            exchangeId,
+            data,
+            requiredResponse: true,
+            deadline: new Date(Date.now() + timeoutMs)
+          }
+        },
+        timestamp: new Date(),
+        priority: MessagePriority.HIGH
+      };
+      
+      this.send(coordinationMessage).catch(error => {
+        clearTimeout(timeoutId);
+        this.removeListener('message:delivered', responseHandler);
+        reject(error);
+      });
+    });
+  }
+  
+  /**
+   * Implement barrier synchronization for coordinated actions
+   */
+  public async barrierSync(
+    participants: AgentId[],
+    barrierName: string,
+    timeoutMs: number = 30000
+  ): Promise<void> {
+    const barrierId = `${barrierName}_${Date.now()}`;
+    const arrivedAgents = new Set<string>();
+    const requiredCount = participants.length;
+    
+    return new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        reject(new Error(`Barrier synchronization timeout: ${barrierId}`));
+      }, timeoutMs);
+      
+      const arrivalHandler = (message: Message) => {
+        if (message.content.topic === 'barrier:arrival' && 
+            message.content.body.barrierId === barrierId) {
+          const agentKey = this.getAgentKey(message.from);
+          arrivedAgents.add(agentKey);
+          
+          this.logger.debug('Agent arrived at barrier', { 
+            agentKey, 
+            barrierId, 
+            arrived: arrivedAgents.size, 
+            required: requiredCount 
+          });
+          
+          if (arrivedAgents.size === requiredCount) {
+            clearTimeout(timeoutId);
+            this.removeListener('message:delivered', arrivalHandler);
+            
+            // Notify all participants that barrier is released
+            this.broadcast(
+              { id: 'barrier_coordinator', namespace: 'system' },
+              MessageType.INFORM,
+              {
+                topic: 'barrier:released',
+                body: { barrierId, participants: Array.from(arrivedAgents) }
+              },
+              MessagePriority.HIGH
+            );
+            
+            resolve();
+          }
+        }
+      };
+      
+      this.on('message:delivered', arrivalHandler);
+      
+      // Send barrier setup message to all participants
+      const barrierMessage: Message = {
+        id: uuidv4(),
+        from: { id: 'barrier_coordinator', namespace: 'system' },
+        to: participants,
+        type: MessageType.INFORM,
+        content: {
+          topic: 'barrier:setup',
+          body: {
+            barrierId,
+            participants: participants.map(p => this.getAgentKey(p)),
+            deadline: new Date(Date.now() + timeoutMs)
+          }
+        },
+        timestamp: new Date(),
+        priority: MessagePriority.HIGH
+      };
+      
+      this.send(barrierMessage).catch(error => {
+        clearTimeout(timeoutId);
+        this.removeListener('message:delivered', arrivalHandler);
+        reject(error);
+      });
+    });
+  }
+  
+  /**
+   * Implement consensus mechanism for distributed decision making
+   */
+  public async reachConsensus(
+    participants: AgentId[],
+    proposal: any,
+    consensusThreshold: number = 0.67,
+    timeoutMs: number = 60000
+  ): Promise<{ success: boolean; votes: Map<string, boolean>; consensus?: any }> {
+    const consensusId = uuidv4();
+    const votes = new Map<string, boolean>();
+    const responses = new Map<string, any>();
+    
+    return new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        const success = this.evaluateConsensus(votes, consensusThreshold);
+        resolve({ success: false, votes, consensus: success ? proposal : undefined });
+      }, timeoutMs);
+      
+      const voteHandler = (message: Message) => {
+        if (message.content.topic === 'consensus:vote' && 
+            message.content.body.consensusId === consensusId) {
+          const agentKey = this.getAgentKey(message.from);
+          const vote = message.content.body.vote;
+          const response = message.content.body.response;
+          
+          votes.set(agentKey, vote);
+          responses.set(agentKey, response);
+          
+          this.logger.debug('Vote received', { 
+            agentKey, 
+            vote, 
+            consensusId,
+            totalVotes: votes.size,
+            required: participants.length
+          });
+          
+          if (votes.size === participants.length) {
+            clearTimeout(timeoutId);
+            this.removeListener('message:delivered', voteHandler);
+            
+            const success = this.evaluateConsensus(votes, consensusThreshold);
+            const consensus = success ? this.mergeConsensusResponses(responses) : undefined;
+            
+            // Notify all participants of consensus result
+            this.broadcast(
+              { id: 'consensus_coordinator', namespace: 'system' },
+              MessageType.INFORM,
+              {
+                topic: 'consensus:result',
+                body: {
+                  consensusId,
+                  success,
+                  votes: Object.fromEntries(votes),
+                  consensus
+                }
+              },
+              MessagePriority.HIGH
+            );
+            
+            resolve({ success, votes, consensus });
+          }
+        }
+      };
+      
+      this.on('message:delivered', voteHandler);
+      
+      // Send consensus proposal to all participants
+      const proposalMessage: Message = {
+        id: uuidv4(),
+        from: { id: 'consensus_coordinator', namespace: 'system' },
+        to: participants,
+        type: MessageType.REQUEST,
+        content: {
+          topic: 'consensus:proposal',
+          body: {
+            consensusId,
+            proposal,
+            threshold: consensusThreshold,
+            deadline: new Date(Date.now() + timeoutMs)
+          }
+        },
+        timestamp: new Date(),
+        priority: MessagePriority.HIGH
+      };
+      
+      this.send(proposalMessage).catch(error => {
+        clearTimeout(timeoutId);
+        this.removeListener('message:delivered', voteHandler);
+        reject(error);
+      });
+    });
+  }
+  
+  /**
+   * Pipeline coordination for sequential task execution
+   */
+  public async coordinatePipeline(
+    stages: { agentId: AgentId; task: any }[],
+    initialData: any,
+    timeoutMs: number = 120000
+  ): Promise<any> {
+    let currentData = initialData;
+    
+    for (let i = 0; i < stages.length; i++) {
+      const stage = stages[i];
+      const stageId = uuidv4();
+      
+      try {
+        const stageMessage: Message = {
+          id: uuidv4(),
+          from: { id: 'pipeline_coordinator', namespace: 'system' },
+          to: stage.agentId,
+          type: MessageType.COMMAND,
+          content: {
+            topic: 'pipeline:stage',
+            body: {
+              stageId,
+              stageNumber: i + 1,
+              totalStages: stages.length,
+              task: stage.task,
+              inputData: currentData,
+              deadline: new Date(Date.now() + timeoutMs / stages.length)
+            }
+          },
+          timestamp: new Date(),
+          priority: MessagePriority.HIGH
+        };
+        
+        const response = await this.sendAndWaitForResponse(stageMessage, timeoutMs / stages.length);
+        currentData = response.content.body.outputData;
+        
+        this.logger.info('Pipeline stage completed', { 
+          stageId, 
+          stageNumber: i + 1, 
+          agentId: this.getAgentKey(stage.agentId) 
+        });
+        
+      } catch (error) {
+        this.logger.error('Pipeline stage failed', { 
+          stageNumber: i + 1, 
+          agentId: this.getAgentKey(stage.agentId), 
+          error 
+        });
+        throw new Error(`Pipeline failed at stage ${i + 1}: ${error}`);
+      }
+    }
+    
+    return currentData;
+  }
+  
+  /**
+   * Monitor message flow and detect coordination issues
+   */
+  public getCoordinationMetrics(): {
+    messageCount: number;
+    averageResponseTime: number;
+    failureRate: number;
+    activeAgents: number;
+    queueSizes: Map<string, number>;
+  } {
+    const now = Date.now();
+    const recentMessages = this.messageHistory.filter(
+      m => now - m.timestamp.getTime() < 60000 // Last minute
+    );
+    
+    const responseMessages = recentMessages.filter(m => m.replyTo);
+    const averageResponseTime = responseMessages.length > 0 ?
+      responseMessages.reduce((sum, m) => {
+        const original = this.messageHistory.find(orig => orig.id === m.replyTo);
+        return sum + (original ? m.timestamp.getTime() - original.timestamp.getTime() : 0);
+      }, 0) / responseMessages.length : 0;
+    
+    const queueSizes = new Map<string, number>();
+    for (const [key, queue] of this.queues) {
+      queueSizes.set(key, queue.size());
+    }
+    
+    return {
+      messageCount: recentMessages.length,
+      averageResponseTime,
+      failureRate: 0, // Would track actual failures
+      activeAgents: this.router.getRegisteredAgents().length,
+      queueSizes
+    };
+  }
+  
+  /**
+   * Utility methods for consensus and coordination
+   */
+  private evaluateConsensus(votes: Map<string, boolean>, threshold: number): boolean {
+    if (votes.size === 0) return false;
+    
+    const positiveVotes = Array.from(votes.values()).filter(v => v).length;
+    return (positiveVotes / votes.size) >= threshold;
+  }
+  
+  private mergeConsensusResponses(responses: Map<string, any>): any {
+    // Simple consensus merging - can be enhanced based on requirements
+    const allResponses = Array.from(responses.values());
+    if (allResponses.length === 0) return null;
+    
+    // For now, return the most common response
+    const responseCount = new Map<string, number>();
+    allResponses.forEach(response => {
+      const key = JSON.stringify(response);
+      responseCount.set(key, (responseCount.get(key) || 0) + 1);
+    });
+    
+    let maxCount = 0;
+    let consensusResponse = null;
+    for (const [responseKey, count] of responseCount) {
+      if (count > maxCount) {
+        maxCount = count;
+        consensusResponse = JSON.parse(responseKey);
+      }
+    }
+    
+    return consensusResponse;
   }
 }
