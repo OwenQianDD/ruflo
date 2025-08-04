@@ -229,9 +229,8 @@ export class WorkflowExecutor {
     console.log(`    🤖 Spawning Claude for ${agent.name}: claude ${flagsDisplay} "${displayPrompt}"`);
     
     // Spawn Claude process
-    // In non-interactive mode with stream-json, use inherit to see real-time output
     const claudeProcess = spawn('claude', claudeArgs, {
-      stdio: 'inherit', // Always inherit to see Claude's output directly
+      stdio: ['inherit', 'pipe', 'pipe'], // Pipe stdout/stderr for processing
       shell: false,
     });
     
