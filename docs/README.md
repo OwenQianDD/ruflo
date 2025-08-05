@@ -44,6 +44,11 @@ Welcome to the comprehensive documentation for Claude Flow v2.0.0 - Intelligent 
 - **[Performance Comparison](./performance-comparison.md)** - Benchmarks and optimizations
 - **[Troubleshooting](./09-troubleshooting.md)** - Common issues and solutions
 
+## 🔗 Integration Guides
+
+### External Models & Services
+- **[Claude Code with Open Models](./wiki/claude-code-open-models-tutorial.md)** - Use GPT-OSS and Qwen3-Coder with Claude Code
+
 ## 📊 Reports & Analysis
 
 ### Performance Reports
