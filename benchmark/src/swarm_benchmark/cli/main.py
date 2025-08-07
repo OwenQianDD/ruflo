@@ -338,6 +338,9 @@ def sparc_cmd(ctx, mode, task, namespace, timeout, non_interactive, output_dir):
                timeout=timeout, non_interactive=non_interactive, output_dir=output_dir)
 
 
+# Add SWE-Bench command group
+cli.add_command(swe_bench)
+
 # Keep the real group for backward compatibility but mark as deprecated
 @cli.group()
 @click.pass_context
