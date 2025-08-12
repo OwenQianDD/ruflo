@@ -786,13 +786,12 @@ export async function trainingPipelineCommand(args, flags) {
         validate: flags.validate !== false
       };
       
-      console.log('🚀 Starting REAL Training Pipeline');
+      console.log('🚀 Starting Training Pipeline');
       console.log(`   Complexity: ${options.complexity}`);
       console.log(`   Iterations: ${options.iterations}`);
       console.log(`   Validation: ${options.validate ? 'Enabled' : 'Disabled'}`);
-      console.log('   Mode: REAL EXECUTION\n');
       
-      const result = await pipeline.runRealPipeline(options);
+      const result = await pipeline.runFullPipeline(options);
       
       if (result.success) {
         console.log('\n✅ Real Training Pipeline completed');
