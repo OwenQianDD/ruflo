@@ -423,13 +423,16 @@ async function detectMemoryMode(flags, subArgs) {
     return 'reasoningbank';
   } catch (error) {
     // SQLite initialization failed - fall back to JSON
-    const isBetterSqliteError = error.message?.includes('BetterSqlite3') ||
-                                 error.message?.includes('better-sqlite3');
+    const isSqliteError = error.message?.includes('BetterSqlite3') ||
+                          error.message?.includes('better-sqlite3') ||
+                          error.message?.includes('could not run migrations') ||
+                          error.message?.includes('ReasoningBank initialization failed');
     const isNpx = process.env.npm_config_user_agent?.includes('npx') ||
                   process.cwd().includes('_npx');
 
-    if (isBetterSqliteError && isNpx) {
+    if (isSqliteError && isNpx) {
       // Silent fallback for npx - error already shown by adapter
+      console.log('\n✅ Automatically using JSON fallback for this command\n');
       return 'basic';
     } else {
       printWarning(`⚠️  SQLite unavailable, using JSON fallback`);

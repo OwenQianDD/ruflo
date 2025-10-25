@@ -44,8 +44,11 @@ async function ensureInitialized() {
       console.error('[ReasoningBank] Backend initialization failed:', error);
 
       // Check if this is the better-sqlite3 missing error (npx issue)
-      if (error.message?.includes('BetterSqlite3 is not a constructor') ||
-          error.message?.includes('better-sqlite3')) {
+      const isSqliteError = error.message?.includes('BetterSqlite3 is not a constructor') ||
+                           error.message?.includes('better-sqlite3') ||
+                           error.message?.includes('could not run migrations');
+
+      if (isSqliteError) {
         const isNpx = process.env.npm_config_user_agent?.includes('npx') ||
                       process.cwd().includes('_npx');
 
@@ -58,7 +61,7 @@ async function ensureInitialized() {
           console.error('  2. USE MCP TOOLS instead:');
           console.error('     mcp__claude-flow__memory_usage({ action: "store", key: "test", value: "data" })\n');
           console.error('  3. USE JSON FALLBACK:');
-          console.error('     npx claude-flow@alpha memory store "key" "value" --no-reasoningbank\n');
+          console.error('     npx claude-flow@alpha memory store "key" "value" --basic\n');
           console.error('See: docs/MEMORY_COMMAND_FIX.md for details\n');
         }
       }
