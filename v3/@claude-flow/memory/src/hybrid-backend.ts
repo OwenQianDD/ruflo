@@ -686,7 +686,7 @@ export class HybridBackend extends EventEmitter implements IMemoryBackend {
     return this.sqlite;
   }
 
-  getAgentDBBackend(): AgentDBAdapter {
+  getAgentDBBackend(): AgentDBBackend {
     return this.agentdb;
   }
 }
