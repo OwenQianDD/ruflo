@@ -486,17 +486,22 @@ describe('Edge Cases', () => {
   });
 
   it('should handle single key/value pair', () => {
+    // Use matching dimension optimizer
+    const singleOptimizer = createFlashAttentionOptimizer(512);
     const input: AttentionInput = {
       query: new Float32Array(512).fill(0.5),
       keys: [new Float32Array(512).fill(0.3)],
       values: [new Float32Array(512).fill(0.2)],
     };
 
-    const output = optimizer.optimize(input);
+    const output = singleOptimizer.optimize(input);
     expect(output).toBeDefined();
+    expect(output.result.length).toBe(512);
   });
 
   it('should handle many keys/values', () => {
+    // Use matching dimension optimizer
+    const manyOptimizer = createFlashAttentionOptimizer(512);
     const numKeys = 100;
     const input: AttentionInput = {
       query: new Float32Array(512).fill(0.5),
@@ -504,7 +509,8 @@ describe('Edge Cases', () => {
       values: Array.from({ length: numKeys }, () => new Float32Array(512).fill(0.2)),
     };
 
-    const output = optimizer.optimize(input);
+    const output = manyOptimizer.optimize(input);
     expect(output).toBeDefined();
+    expect(output.result.length).toBe(512);
   });
 });
