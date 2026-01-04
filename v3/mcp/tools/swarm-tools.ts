@@ -300,49 +300,80 @@ async function handleScaleSwarm(
   input: z.infer<typeof scaleSwarmSchema>,
   context?: ToolContext
 ): Promise<ScaleSwarmResult> {
-  // TODO: Integrate with actual swarm coordinator when available
-  // For now, return stub response
-
-  const swarmId = 'swarm-current';
-  const previousAgents = 5;
   const scaledAt = new Date().toISOString();
 
-  const result: ScaleSwarmResult = {
-    swarmId,
-    previousAgents,
-    targetAgents: input.targetAgents,
-    currentAgents: input.targetAgents,
-    scalingStatus: 'completed',
-    scaledAt,
-  };
+  // Try to use swarmCoordinator if available
+  if (context?.swarmCoordinator) {
+    try {
+      const { UnifiedSwarmCoordinator } = await import('@claude-flow/swarm');
+      const coordinator = context.swarmCoordinator as InstanceType<typeof UnifiedSwarmCoordinator>;
 
-  if (input.targetAgents > previousAgents) {
-    // Scaling up
-    const newAgentCount = input.targetAgents - previousAgents;
-    result.addedAgents = Array.from({ length: newAgentCount }, (_, i) =>
-      `agent-new-${i + 1}`
-    );
-  } else if (input.targetAgents < previousAgents) {
-    // Scaling down
-    const removedAgentCount = previousAgents - input.targetAgents;
-    result.removedAgents = Array.from({ length: removedAgentCount }, (_, i) =>
-      `agent-removed-${i + 1}`
-    );
+      // Get current status
+      const beforeStatus = await coordinator.getStatus();
+      const previousAgents = beforeStatus.agents.length;
+
+      // Perform scaling (note: UnifiedSwarmCoordinator may not have a direct scale method,
+      // so we spawn or terminate agents to reach the target)
+      const addedAgents: string[] = [];
+      const removedAgents: string[] = [];
+
+      if (input.targetAgents > previousAgents) {
+        // Scale up
+        const count = input.targetAgents - previousAgents;
+        const agentTypes = input.agentTypes || ['worker'];
+
+        for (let i = 0; i < count; i++) {
+          const agentType = agentTypes[i % agentTypes.length];
+          const agentId = `agent-scaled-${Date.now()}-${i}`;
+
+          await coordinator.spawnAgent({
+            id: agentId,
+            type: agentType as any,
+            capabilities: [],
+            priority: 3,
+          });
+
+          addedAgents.push(agentId);
+        }
+      } else if (input.targetAgents < previousAgents) {
+        // Scale down
+        const count = previousAgents - input.targetAgents;
+        const agentsToRemove = beforeStatus.agents.slice(-count);
+
+        for (const agent of agentsToRemove) {
+          await coordinator.terminateAgent(agent.id);
+          removedAgents.push(agent.id);
+        }
+      }
+
+      // Get updated status
+      const afterStatus = await coordinator.getStatus();
+
+      return {
+        swarmId: beforeStatus.swarmId,
+        previousAgents,
+        targetAgents: input.targetAgents,
+        currentAgents: afterStatus.agents.length,
+        scalingStatus: afterStatus.agents.length === input.targetAgents ? 'completed' : 'in-progress',
+        scaledAt,
+        addedAgents: addedAgents.length > 0 ? addedAgents : undefined,
+        removedAgents: removedAgents.length > 0 ? removedAgents : undefined,
+      };
+    } catch (error) {
+      // Fall through to simple implementation if coordinator fails
+      console.error('Failed to scale swarm via coordinator:', error);
+    }
   }
 
-  // TODO: Call actual swarm coordinator
-  // const swarmCoordinator = context?.swarmCoordinator as SwarmCoordinator;
-  // if (swarmCoordinator) {
-  //   const scaleResult = await swarmCoordinator.scale({
-  //     targetAgents: input.targetAgents,
-  //     strategy: input.scaleStrategy,
-  //     agentTypes: input.agentTypes,
-  //     reason: input.reason,
-  //   });
-  //   return scaleResult;
-  // }
-
-  return result;
+  // Simple implementation when no coordinator is available
+  return {
+    swarmId: 'swarm-not-initialized',
+    previousAgents: 0,
+    targetAgents: input.targetAgents,
+    currentAgents: 0,
+    scalingStatus: 'failed',
+    scaledAt,
+  };
 }
 
 // ============================================================================
