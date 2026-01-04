@@ -308,46 +308,55 @@ describe('CLI', () => {
 
   describe('Global Flags', () => {
     it('should handle --quiet flag', async () => {
+      let flagsPassed = false;
       const mockCommand: Command = {
-        name: 'test',
+        name: 'testquiet',
         description: 'Test command',
         action: async (ctx) => {
           expect(ctx.flags.quiet).toBe(true);
           expect(ctx.interactive).toBe(false);
+          flagsPassed = true;
           return { success: true };
         }
       };
 
       cli['parser'].registerCommand(mockCommand);
-      await cli.run(['test', '--quiet']);
+      await cli.run(['testquiet', '--quiet']);
+      expect(flagsPassed).toBe(true);
     });
 
     it('should handle --format flag', async () => {
+      let flagsPassed = false;
       const mockCommand: Command = {
-        name: 'test',
+        name: 'testformat',
         description: 'Test command',
         action: async (ctx) => {
           expect(ctx.flags.format).toBe('json');
+          flagsPassed = true;
           return { success: true };
         }
       };
 
       cli['parser'].registerCommand(mockCommand);
-      await cli.run(['test', '--format', 'json']);
+      await cli.run(['testformat', '--format', 'json']);
+      expect(flagsPassed).toBe(true);
     });
 
     it('should handle --config flag', async () => {
+      let flagsPassed = false;
       const mockCommand: Command = {
-        name: 'test',
+        name: 'testconfig',
         description: 'Test command',
         action: async (ctx) => {
           expect(ctx.flags.config).toBe('./custom-config.json');
+          flagsPassed = true;
           return { success: true };
         }
       };
 
       cli['parser'].registerCommand(mockCommand);
-      await cli.run(['test', '--config', './custom-config.json']);
+      await cli.run(['testconfig', '--config', './custom-config.json']);
+      expect(flagsPassed).toBe(true);
     });
 
     it('should disable color with --no-color', async () => {
