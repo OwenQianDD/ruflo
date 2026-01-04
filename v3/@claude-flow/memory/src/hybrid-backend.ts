@@ -35,7 +35,7 @@ export interface HybridBackendConfig {
   sqlite?: Partial<SQLiteBackendConfig>;
 
   /** AgentDB configuration */
-  agentdb?: Partial<AgentDBAdapterConfig>;
+  agentdb?: Partial<AgentDBBackendConfig>;
 
   /** Default namespace */
   defaultNamespace?: string;
