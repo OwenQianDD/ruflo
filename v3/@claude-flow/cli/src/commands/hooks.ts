@@ -1737,17 +1737,21 @@ export const hooksCommand: Command = {
     output.writeln();
     output.writeln('Subcommands:');
     output.printList([
-      `${output.highlight('pre-edit')}       - Get context before editing files`,
-      `${output.highlight('post-edit')}      - Record editing outcomes for learning`,
-      `${output.highlight('pre-command')}    - Assess risk before executing commands`,
-      `${output.highlight('post-command')}   - Record command execution outcomes`,
-      `${output.highlight('route')}          - Route tasks to optimal agents`,
-      `${output.highlight('explain')}        - Explain routing decisions`,
-      `${output.highlight('pretrain')}       - Bootstrap intelligence from repository`,
-      `${output.highlight('build-agents')}   - Generate optimized agent configs`,
-      `${output.highlight('metrics')}        - View learning metrics dashboard`,
-      `${output.highlight('transfer')}       - Transfer patterns from another project`,
-      `${output.highlight('list')}           - List all registered hooks`
+      `${output.highlight('pre-edit')}        - Get context before editing files`,
+      `${output.highlight('post-edit')}       - Record editing outcomes for learning`,
+      `${output.highlight('pre-command')}     - Assess risk before executing commands`,
+      `${output.highlight('post-command')}    - Record command execution outcomes`,
+      `${output.highlight('pre-task')}        - Record task start and get agent suggestions`,
+      `${output.highlight('post-task')}       - Record task completion for learning`,
+      `${output.highlight('session-end')}     - End current session and persist state`,
+      `${output.highlight('session-restore')} - Restore a previous session`,
+      `${output.highlight('route')}           - Route tasks to optimal agents`,
+      `${output.highlight('explain')}         - Explain routing decisions`,
+      `${output.highlight('pretrain')}        - Bootstrap intelligence from repository`,
+      `${output.highlight('build-agents')}    - Generate optimized agent configs`,
+      `${output.highlight('metrics')}         - View learning metrics dashboard`,
+      `${output.highlight('transfer')}        - Transfer patterns from another project`,
+      `${output.highlight('list')}            - List all registered hooks`
     ]);
     output.writeln();
     output.writeln('Run "claude-flow hooks <subcommand> --help" for subcommand help');
