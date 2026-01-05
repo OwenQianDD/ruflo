@@ -14,8 +14,8 @@ import {
   MCPClientError
 } from '../src/mcp-client.js';
 
-// Mock MCP tool modules
-vi.mock('../../../mcp/tools/agent-tools.js', () => ({
+// Mock MCP tool modules - correct paths matching mcp-client.ts imports
+vi.mock('../src/mcp-tools/agent-tools.js', () => ({
   agentTools: [
     {
       name: 'agent/spawn',
@@ -77,7 +77,7 @@ vi.mock('../../../mcp/tools/agent-tools.js', () => ({
   ]
 }));
 
-vi.mock('../../../mcp/tools/swarm-tools.js', () => ({
+vi.mock('../src/mcp-tools/swarm-tools.js', () => ({
   swarmTools: [
     {
       name: 'swarm/init',
@@ -105,7 +105,7 @@ vi.mock('../../../mcp/tools/swarm-tools.js', () => ({
   ]
 }));
 
-vi.mock('../../../mcp/tools/memory-tools.js', () => ({
+vi.mock('../src/mcp-tools/memory-tools.js', () => ({
   memoryTools: [
     {
       name: 'memory/store',
@@ -129,7 +129,7 @@ vi.mock('../../../mcp/tools/memory-tools.js', () => ({
   ]
 }));
 
-vi.mock('../../../mcp/tools/config-tools.js', () => ({
+vi.mock('../src/mcp-tools/config-tools.js', () => ({
   configTools: [
     {
       name: 'config/get',
