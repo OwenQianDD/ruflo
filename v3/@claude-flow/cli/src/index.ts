@@ -142,6 +142,11 @@ export class CLI {
         this.showCommandHelp(commandName);
       }
     } catch (error) {
+      // Don't re-handle if this is a process.exit error (from mocked tests)
+      const errorMessage = (error as Error).message;
+      if (errorMessage && errorMessage.startsWith('process.exit:')) {
+        throw error; // Re-throw so tests can capture the exit code
+      }
       this.handleError(error as Error);
     }
   }
