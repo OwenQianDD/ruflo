@@ -267,7 +267,7 @@ Workers run automatically in the background based on context, or can be dispatch
 **Worker Commands:**
 ```bash
 # Dispatch a worker manually
-npx claude-flow worker dispatch --trigger audit --context "./src"
+npx claude-flow@v3alpha worker dispatch --trigger audit --context "./src"
 
 # Check worker status
 npx claude-flow worker status
