@@ -157,6 +157,7 @@ export async function getCompletionsCommand() { return loadCommand('completions'
 export async function getAnalyzeCommand() { return loadCommand('analyze'); }
 export async function getRouteCommand() { return loadCommand('route'); }
 export async function getProgressCommand() { return loadCommand('progress'); }
+export async function getIssuesCommand() { return loadCommand('issues'); }
 
 /**
  * Core commands loaded synchronously (available immediately)
