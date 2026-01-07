@@ -425,22 +425,74 @@ export class QLearningRouter {
 
   /**
    * Update Q-values based on feedback
+   * Includes experience replay for stable learning
    */
   update(taskContext: string, action: string, reward: number, nextContext?: string): number {
-    const stateKey = this.hashState(taskContext);
+    const stateKey = this.hashStateOptimized(taskContext);
     const actionIdx = ROUTE_NAMES.indexOf(action);
 
     if (actionIdx === -1) {
       return 0;
     }
 
+    const nextStateKey = nextContext ? this.hashStateOptimized(nextContext) : null;
+
+    // Store experience in replay buffer
+    if (this.config.enableReplay) {
+      const experience: Experience = {
+        stateKey,
+        actionIdx,
+        reward,
+        nextStateKey,
+        timestamp: Date.now(),
+        priority: Math.abs(reward) + 0.1, // Initial priority based on reward magnitude
+      };
+      this.addToReplayBuffer(experience);
+    }
+
+    // Perform direct update
+    const tdError = this.updateQValue(stateKey, actionIdx, reward, nextStateKey);
+
+    // Perform experience replay
+    if (this.config.enableReplay && this.replayBuffer.length >= this.config.replayBatchSize) {
+      this.experienceReplay();
+    }
+
+    // Decay exploration using configured strategy
+    this.stepCount++;
+    this.epsilon = this.calculateEpsilon();
+
+    // Prune Q-table if needed
+    if (this.qTable.size > this.config.maxStates) {
+      this.pruneQTable();
+    }
+
+    this.updateCount++;
+    this.avgTDError = (this.avgTDError * (this.updateCount - 1) + Math.abs(tdError)) / this.updateCount;
+
+    // Auto-save periodically
+    if (this.config.autoSaveInterval > 0 && this.updateCount % this.config.autoSaveInterval === 0) {
+      this.saveModel().catch(() => {}); // Fire and forget
+    }
+
+    // Invalidate cache periodically to reflect Q-table changes
+    if (this.updateCount % 50 === 0) {
+      this.invalidateCache();
+    }
+
+    return tdError;
+  }
+
+  /**
+   * Internal Q-value update
+   */
+  private updateQValue(stateKey: string, actionIdx: number, reward: number, nextStateKey: string | null): number {
     const entry = this.getOrCreateEntry(stateKey);
     const currentQ = entry.qValues[actionIdx];
 
     // Calculate target Q-value
     let targetQ: number;
-    if (nextContext) {
-      const nextStateKey = this.hashState(nextContext);
+    if (nextStateKey) {
       const nextQValues = this.getQValues(nextStateKey);
       const maxNextQ = Math.max(...nextQValues);
       targetQ = reward + this.config.gamma * maxNextQ;
@@ -457,22 +509,93 @@ export class QLearningRouter {
     entry.visits++;
     entry.lastUpdate = Date.now();
 
-    // Decay exploration
-    this.stepCount++;
-    this.epsilon = Math.max(
-      this.config.explorationFinal,
-      this.config.explorationInitial - this.stepCount / this.config.explorationDecay
-    );
+    return tdError;
+  }
 
-    // Prune Q-table if needed
-    if (this.qTable.size > this.config.maxStates) {
-      this.pruneQTable();
+  /**
+   * Add experience to circular replay buffer
+   */
+  private addToReplayBuffer(experience: Experience): void {
+    if (this.replayBuffer.length < this.config.replayBufferSize) {
+      this.replayBuffer.push(experience);
+    } else {
+      this.replayBuffer[this.replayBufferIdx] = experience;
+    }
+    this.replayBufferIdx = (this.replayBufferIdx + 1) % this.config.replayBufferSize;
+    this.totalExperiences++;
+  }
+
+  /**
+   * Perform prioritized experience replay
+   * Samples mini-batch from buffer and updates Q-values
+   */
+  private experienceReplay(): void {
+    if (this.replayBuffer.length < this.config.replayBatchSize) {
+      return;
     }
 
-    this.updateCount++;
-    this.avgTDError = (this.avgTDError * (this.updateCount - 1) + Math.abs(tdError)) / this.updateCount;
+    // Prioritized sampling based on TD error magnitude
+    const batch = this.samplePrioritizedBatch(this.config.replayBatchSize);
 
-    return tdError;
+    for (const exp of batch) {
+      const tdError = this.updateQValue(exp.stateKey, exp.actionIdx, exp.reward, exp.nextStateKey);
+
+      // Update priority for future sampling
+      exp.priority = Math.abs(tdError) + 0.01; // Small constant to avoid zero priority
+    }
+  }
+
+  /**
+   * Sample a prioritized batch from replay buffer
+   * Uses proportional prioritization
+   */
+  private samplePrioritizedBatch(batchSize: number): Experience[] {
+    const totalPriority = this.replayBuffer.reduce((sum, exp) => sum + exp.priority, 0);
+    const batch: Experience[] = [];
+    const selected = new Set<number>();
+
+    while (batch.length < batchSize && selected.size < this.replayBuffer.length) {
+      let threshold = Math.random() * totalPriority;
+      let cumSum = 0;
+
+      for (let i = 0; i < this.replayBuffer.length; i++) {
+        if (selected.has(i)) continue;
+
+        cumSum += this.replayBuffer[i].priority;
+        if (cumSum >= threshold) {
+          batch.push(this.replayBuffer[i]);
+          selected.add(i);
+          break;
+        }
+      }
+    }
+
+    return batch;
+  }
+
+  /**
+   * Calculate epsilon using configured decay strategy
+   */
+  private calculateEpsilon(): number {
+    const { explorationInitial, explorationFinal, explorationDecay, explorationDecayType } = this.config;
+    const progress = Math.min(this.stepCount / explorationDecay, 1.0);
+
+    switch (explorationDecayType) {
+      case 'linear':
+        return explorationFinal + (explorationInitial - explorationFinal) * (1 - progress);
+
+      case 'exponential':
+        // Exponential decay: epsilon = final + (initial - final) * exp(-decay_rate * step)
+        const decayRate = -Math.log((explorationFinal / explorationInitial) + 1e-8) / explorationDecay;
+        return explorationFinal + (explorationInitial - explorationFinal) * Math.exp(-decayRate * this.stepCount);
+
+      case 'cosine':
+        // Cosine annealing: smooth transition
+        return explorationFinal + (explorationInitial - explorationFinal) * 0.5 * (1 + Math.cos(Math.PI * progress));
+
+      default:
+        return Math.max(explorationFinal, explorationInitial - this.stepCount / explorationDecay);
+    }
   }
 
   /**
