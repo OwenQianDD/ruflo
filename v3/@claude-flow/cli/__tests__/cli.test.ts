@@ -132,48 +132,54 @@ describe('CLI', () => {
     it('should show error for unknown command', async () => {
       // Reset output
       consoleOutput = [];
+      consoleErrorOutput = [];
 
       try {
         await cli.run(['invalid-command']);
         // Should throw, but might not in current implementation
       } catch (e) {
-        // Error may or may not be thrown
+        // Error may or may not be thrown (process.exit throws)
       }
 
-      const output = consoleOutput.join('');
+      // Check both stdout and stderr (errors go to stderr)
+      const allOutput = [...consoleOutput, ...consoleErrorOutput].join('');
       // Check that output contains either error message or help
-      const hasError = output.includes('Unknown command') || output.includes('invalid-command');
-      const hasHelp = output.includes('USAGE:') || output.includes('COMMANDS:');
+      const hasError = allOutput.includes('Unknown command') || allOutput.includes('invalid-command');
+      const hasHelp = allOutput.includes('USAGE:') || allOutput.includes('COMMANDS:');
       expect(hasError || hasHelp).toBe(true);
     });
 
     it('should suggest help for unknown command', async () => {
       consoleOutput = [];
+      consoleErrorOutput = [];
 
       try {
         await cli.run(['nonexistent']);
       } catch (e) {
-        // Error may or may not be thrown
+        // Error may or may not be thrown (process.exit throws)
       }
 
-      const output = consoleOutput.join('');
+      // Check both stdout and stderr
+      const allOutput = [...consoleOutput, ...consoleErrorOutput].join('');
       // Either shows error or help
-      const hasMessage = output.includes('nonexistent') || output.includes('help') || output.includes('COMMANDS:');
+      const hasMessage = allOutput.includes('nonexistent') || allOutput.includes('help') || allOutput.includes('COMMANDS:');
       expect(hasMessage).toBe(true);
     });
 
     it('should handle misspelled commands', async () => {
       consoleOutput = [];
+      consoleErrorOutput = [];
 
       try {
         await cli.run(['agnet']);
       } catch (e) {
-        // Error may or may not be thrown
+        // Error may or may not be thrown (process.exit throws)
       }
 
-      const output = consoleOutput.join('');
+      // Check both stdout and stderr
+      const allOutput = [...consoleOutput, ...consoleErrorOutput].join('');
       // Either shows error or help
-      const hasMessage = output.includes('agnet') || output.includes('Unknown') || output.includes('COMMANDS:');
+      const hasMessage = allOutput.includes('agnet') || allOutput.includes('Unknown') || allOutput.includes('COMMANDS:');
       expect(hasMessage).toBe(true);
     });
   });
