@@ -101,6 +101,8 @@ async function loadCommand(name: string): Promise<Command | undefined> {
 import { initCommand } from './init.js';
 import { startCommand } from './start.js';
 import { statusCommand } from './status.js';
+import { taskCommand } from './task.js';
+import { sessionCommand } from './session.js';
 import { agentCommand } from './agent.js';
 import { swarmCommand } from './swarm.js';
 import { memoryCommand } from './memory.js';
@@ -113,6 +115,8 @@ import { doctorCommand } from './doctor.js';
 loadedCommands.set('init', initCommand);
 loadedCommands.set('start', startCommand);
 loadedCommands.set('status', statusCommand);
+loadedCommands.set('task', taskCommand);
+loadedCommands.set('session', sessionCommand);
 loadedCommands.set('agent', agentCommand);
 loadedCommands.set('swarm', swarmCommand);
 loadedCommands.set('memory', memoryCommand);
