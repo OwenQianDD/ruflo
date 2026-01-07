@@ -1104,7 +1104,7 @@ export async function analyzeGraph(
     communities = await analyzeModuleCommunities(graph);
   }
 
-  return {
+  const result: GraphAnalysisResult = {
     graph,
     boundaries,
     communities,
@@ -1118,6 +1118,11 @@ export async function analyzeGraph(
       componentCount,
     },
   };
+
+  // Cache the result
+  analysisResultCache.set(cacheKey, { result, timestamp: Date.now() });
+
+  return result;
 }
 
 // ============================================================================
