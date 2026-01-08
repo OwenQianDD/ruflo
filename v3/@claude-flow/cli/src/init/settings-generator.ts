@@ -93,7 +93,7 @@ function generateStatusLineConfig(options: InitOptions): object {
 function generateHooksConfig(config: HooksConfig): object {
   const hooks: Record<string, unknown[]> = {};
 
-  // PreToolUse hooks - using cross-platform Node.js helpers
+  // PreToolUse hooks - cross-platform via npx
   if (config.preToolUse) {
     hooks.PreToolUse = [
       // File edit hooks with intelligence routing
@@ -102,7 +102,7 @@ function generateHooksConfig(config: HooksConfig): object {
         hooks: [
           {
             type: 'command',
-            command: 'node .claude/helpers/hooks.mjs pre-edit --file "$TOOL_INPUT_file_path" --intelligence',
+            command: 'npx @claude-flow/cli@latest hooks pre-edit --file "$TOOL_INPUT_file_path" --intelligence',
             timeout: config.timeout,
             continueOnError: config.continueOnError,
           },
@@ -114,7 +114,7 @@ function generateHooksConfig(config: HooksConfig): object {
         hooks: [
           {
             type: 'command',
-            command: 'node .claude/helpers/hooks.mjs pre-command --command "$TOOL_INPUT_command" --validate-safety',
+            command: 'npx @claude-flow/cli@latest hooks pre-command --command "$TOOL_INPUT_command" --validate-safety',
             timeout: config.timeout,
             continueOnError: config.continueOnError,
           },
@@ -126,7 +126,7 @@ function generateHooksConfig(config: HooksConfig): object {
         hooks: [
           {
             type: 'command',
-            command: 'node .claude/helpers/hooks.mjs pre-task --description "$TOOL_INPUT_prompt"',
+            command: 'npx @claude-flow/cli@latest hooks pre-task --description "$TOOL_INPUT_prompt"',
             timeout: config.timeout,
             continueOnError: config.continueOnError,
           },
@@ -138,7 +138,7 @@ function generateHooksConfig(config: HooksConfig): object {
         hooks: [
           {
             type: 'command',
-            command: 'node .claude/helpers/hooks.mjs pre-search --pattern "$TOOL_INPUT_pattern"',
+            command: 'npx @claude-flow/cli@latest hooks pre-search --pattern "$TOOL_INPUT_pattern"',
             timeout: 2000,
             continueOnError: config.continueOnError,
           },
@@ -147,7 +147,7 @@ function generateHooksConfig(config: HooksConfig): object {
     ];
   }
 
-  // PostToolUse hooks - using cross-platform Node.js helpers
+  // PostToolUse hooks - cross-platform via npx
   if (config.postToolUse) {
     hooks.PostToolUse = [
       // File edit hooks with neural pattern training
@@ -156,7 +156,7 @@ function generateHooksConfig(config: HooksConfig): object {
         hooks: [
           {
             type: 'command',
-            command: 'node .claude/helpers/hooks.mjs post-edit --file "$TOOL_INPUT_file_path" --success "$TOOL_SUCCESS" --train-patterns',
+            command: 'npx @claude-flow/cli@latest hooks post-edit --file "$TOOL_INPUT_file_path" --success "$TOOL_SUCCESS" --train-patterns',
             timeout: config.timeout,
             continueOnError: config.continueOnError,
           },
@@ -168,7 +168,7 @@ function generateHooksConfig(config: HooksConfig): object {
         hooks: [
           {
             type: 'command',
-            command: 'node .claude/helpers/hooks.mjs post-command --command "$TOOL_INPUT_command" --success "$TOOL_SUCCESS" --exit-code "$TOOL_EXIT_CODE" --track-metrics',
+            command: 'npx @claude-flow/cli@latest hooks post-command --command "$TOOL_INPUT_command" --success "$TOOL_SUCCESS" --exit-code "$TOOL_EXIT_CODE" --track-metrics',
             timeout: config.timeout,
             continueOnError: config.continueOnError,
           },
@@ -180,7 +180,7 @@ function generateHooksConfig(config: HooksConfig): object {
         hooks: [
           {
             type: 'command',
-            command: 'node .claude/helpers/hooks.mjs post-task --agent-id "$TOOL_RESULT_agent_id" --success "$TOOL_SUCCESS" --analyze',
+            command: 'npx @claude-flow/cli@latest hooks post-task --agent-id "$TOOL_RESULT_agent_id" --success "$TOOL_SUCCESS" --analyze',
             timeout: config.timeout,
             continueOnError: config.continueOnError,
           },
@@ -192,7 +192,7 @@ function generateHooksConfig(config: HooksConfig): object {
         hooks: [
           {
             type: 'command',
-            command: 'node .claude/helpers/hooks.mjs post-search --cache-results',
+            command: 'npx @claude-flow/cli@latest hooks post-search --cache-results',
             timeout: 2000,
             continueOnError: config.continueOnError,
           },
@@ -208,7 +208,7 @@ function generateHooksConfig(config: HooksConfig): object {
         hooks: [
           {
             type: 'command',
-            command: 'node .claude/helpers/hooks.mjs route --task "$PROMPT" --intelligence --include-explanation',
+            command: 'npx @claude-flow/cli@latest hooks route --task "$PROMPT" --intelligence --include-explanation',
             timeout: config.timeout,
             continueOnError: config.continueOnError,
           },
@@ -224,13 +224,13 @@ function generateHooksConfig(config: HooksConfig): object {
         hooks: [
           {
             type: 'command',
-            command: 'node .claude/helpers/hooks.mjs daemon-start --quiet',
+            command: 'npx @claude-flow/cli@latest daemon start --quiet',
             timeout: 5000,
             continueOnError: true,
           },
           {
             type: 'command',
-            command: 'node .claude/helpers/hooks.mjs session-start --session-id "$SESSION_ID" --load-context',
+            command: 'npx @claude-flow/cli@latest hooks session-start --session-id "$SESSION_ID" --load-context',
             timeout: 10000,
             continueOnError: true,
           },
@@ -267,7 +267,7 @@ Default to {"ok": true} when uncertain.`,
         hooks: [
           {
             type: 'command',
-            command: 'node .claude/helpers/hooks.mjs notify --message "$NOTIFICATION_MESSAGE" --swarm-status',
+            command: 'npx @claude-flow/cli@latest hooks notify --message "$NOTIFICATION_MESSAGE" --swarm-status',
             timeout: 3000,
             continueOnError: true,
           },
