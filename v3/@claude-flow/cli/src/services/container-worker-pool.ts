@@ -202,10 +202,32 @@ export class ContainerWorkerPool extends EventEmitter {
     // Start idle check timer
     this.startIdleChecks();
 
+    // Register exit handlers for cleanup
+    this.registerExitHandlers();
+
     this.initialized = true;
     this.emit('initialized', { containers: this.containers.size });
 
     return true;
+  }
+
+  /**
+   * Register process exit handlers to clean up containers
+   */
+  private registerExitHandlers(): void {
+    if (this.exitHandlersRegistered) return;
+
+    const cleanup = async () => {
+      if (!this.isShuttingDown) {
+        await this.shutdown();
+      }
+    };
+
+    process.once('SIGTERM', cleanup);
+    process.once('SIGINT', cleanup);
+    process.once('beforeExit', cleanup);
+
+    this.exitHandlersRegistered = true;
   }
 
   /**
