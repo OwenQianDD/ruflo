@@ -179,58 +179,45 @@ const retrieveCommand: Command = {
       return { success: false, exitCode: 1 };
     }
 
-    // Call MCP memory/retrieve tool for real data
+    // Use sql.js directly for consistent data access
     try {
-      const result = await callMCPTool('memory/retrieve', { key }) as {
-        key: string;
-        value: unknown;
-        metadata?: Record<string, unknown>;
-        storedAt?: string;
-        accessCount?: number;
-        found: boolean;
-      };
+      const { getEntry } = await import('../memory/memory-initializer.js');
+      const result = await getEntry({ key, namespace });
 
-      if (!result.found) {
+      if (!result.success) {
+        output.printError(`Failed to retrieve: ${result.error}`);
+        return { success: false, exitCode: 1 };
+      }
+
+      if (!result.found || !result.entry) {
         output.printWarning(`Key not found: ${key}`);
         return { success: false, exitCode: 1, data: { key, found: false } };
       }
 
-      const data = {
-        key: result.key,
-        namespace,
-        value: result.value,
-        metadata: {
-          storedAt: result.storedAt || 'Unknown',
-          accessCount: result.accessCount || 0,
-          lastAccessed: new Date().toISOString(),
-          ...(result.metadata || {})
-        }
-      };
+      const entry = result.entry;
 
       if (ctx.flags.format === 'json') {
-        output.printJson(data);
-        return { success: true, data };
+        output.printJson(entry);
+        return { success: true, data: entry };
       }
-
-      const metaTags = (result.metadata?.tags as string[]) || [];
-      const metaSize = (result.metadata?.size as number) || String(data.value).length;
 
       output.writeln();
       output.printBox(
         [
-          `Namespace: ${namespace}`,
-          `Key: ${data.key}`,
-          `Size: ${metaSize} bytes`,
-          `Access Count: ${data.metadata.accessCount}`,
-          `Tags: ${metaTags.length > 0 ? metaTags.join(', ') : 'None'}`,
+          `Namespace: ${entry.namespace}`,
+          `Key: ${entry.key}`,
+          `Size: ${entry.content.length} bytes`,
+          `Access Count: ${entry.accessCount}`,
+          `Tags: ${entry.tags.length > 0 ? entry.tags.join(', ') : 'None'}`,
+          `Vector: ${entry.hasEmbedding ? 'Yes' : 'No'}`,
           '',
           output.bold('Value:'),
-          typeof data.value === 'string' ? data.value : JSON.stringify(data.value, null, 2)
+          entry.content
         ].join('\n'),
         'Memory Entry'
       );
 
-      return { success: true, data };
+      return { success: true, data: entry };
     } catch (error) {
       output.printError(`Failed to retrieve: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return { success: false, exitCode: 1 };
