@@ -7,4 +7,16 @@ capabilities:
   - security-review
 optimizations:
   - pattern-matching
+
+# ADR-026: 3-Tier Model Routing
+modelRouting:
+  defaultModel: opus
+  agentBoosterIntents: []
+  opusKeywords:
+    - security
+    - authentication
+    - authorization
+    - encryption
+    - vulnerability
+
 createdAt: "2026-01-14T20:17:21.782Z"
