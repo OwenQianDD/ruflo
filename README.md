@@ -2,12 +2,13 @@
 
 <div align="center">
 
-[![ruv.io](https://img.shields.io/badge/ruv.io-AI%20Platform-purple?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0xMiAyQzYuNDggMiAyIDYuNDggMiAxMnM0LjQ4IDEwIDEwIDEwIDEwLTQuNDggMTAtMTBTMTcuNTIgMiAxMiAyem0wIDE4Yy00LjQyIDAtOC0zLjU4LTgtOHMzLjU4LTggOC04IDggMy41OCA4IDgtMy41OCA4LTggOHoiLz48L3N2Zz4=)](https://ruv.io)
+
 [![Star on GitHub](https://img.shields.io/github/stars/ruvnet/claude-flow?style=for-the-badge&logo=github&color=gold)](https://github.com/ruvnet/claude-flow)
 [![Downloads](https://img.shields.io/npm/dt/claude-flow?style=for-the-badge&logo=npm&color=blue&label=Downloads)](https://www.npmjs.com/package/claude-flow)
 [![Latest Release](https://img.shields.io/npm/v/claude-flow/alpha?style=for-the-badge&logo=npm&color=green&label=v3.0.0-alpha)](https://www.npmjs.com/package/claude-flow)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-SDK%20Integrated-green?style=for-the-badge&logo=anthropic)](https://github.com/ruvnet/claude-flow)
 [![Agentics Foundation](https://img.shields.io/badge/Agentics-Foundation-crimson?style=for-the-badge&logo=openai)](https://discord.com/invite/dfxmpwkG2D)
+[![ruv.io](https://img.shields.io/badge/ruv.io-AI%20Platform-purple?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0xMiAyQzYuNDggMiAyIDYuNDggMiAxMnM0LjQ4IDEwIDEwIDEwIDEwLTQuNDggMTAtMTBTMTcuNTIgMiAxMiAyem0wIDE4Yy00LjQyIDAtOC0zLjU4LTgtOHMzLjU4LTggOC04IDggMy41OCA4IDgtMy41OCA4LTggOHoiLz48L3N2Zz4=)](https://ruv.io)
 [![MIT License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge&logo=opensourceinitiative)](https://opensource.org/licenses/MIT)
 
 **Production-ready multi-agent AI orchestration for Claude Code**
@@ -52,7 +53,7 @@ npx claude-flow@v3alpha init
 
 ---
 
-🔄 **Core Flow** — How requests move through the system
+### 🔄 **Core Flow** — How requests move through the system
 | Layer | Components | What It Does |
 |-------|------------|--------------|
 | User | Claude Code, CLI | Your interface to control and run commands |
@@ -60,13 +61,13 @@ npx claude-flow@v3alpha init
 | Agents | 54+ types | Specialized workers (coder, tester, reviewer...) |
 | Providers | Anthropic, OpenAI, Google, Ollama | AI models that power reasoning |
 
-🐝 **Swarm Coordination** — How agents work together
+### 🐝 **Swarm Coordination** — How agents work together
 | Layer | Components | What It Does |
 |-------|------------|--------------|
 | Coordination | Queen, Swarm, Consensus | Manages agent teams (Raft, Byzantine, Gossip) |
 | Drift Control | Hierarchical topology, Checkpoints | Prevents agents from going off-task |
 
-🧠 **Intelligence & Memory** — How the system learns and remembers
+### 🧠 **Intelligence & Memory** — How the system learns and remembers
 | Layer | Components | What It Does |
 |-------|------------|--------------|
 | Memory | HNSW, AgentDB, Cache | Stores and retrieves patterns 150x faster |
@@ -74,13 +75,13 @@ npx claude-flow@v3alpha init
 | Learning | SONA, MoE, ReasoningBank | Self-improves from results (<0.05ms adaptation) |
 | Fine-tuning | MicroLoRA, EWC++ | Lightweight adaptation without full retraining |
 
-⚡ **Optimization** — How to reduce cost and latency
+### ⚡ **Optimization** — How to reduce cost and latency
 | Layer | Components | What It Does |
 |-------|------------|--------------|
 | Agent Booster | WASM, AST analysis | Skips LLM for simple edits (<1ms) |
 | Token Optimizer | Compression, Caching | Reduces token usage 30-50% |
 
-🔧 **Operations** — Background services and integrations
+### 🔧 **Operations** — Background services and integrations
 | Layer | Components | What It Does |
 |-------|------------|--------------|
 | Background | Daemon, 12 Workers | Auto-runs audits, optimization, learning |
@@ -178,21 +179,21 @@ Claude-Flow v3 introduces **self-learning neural capabilities** that no other ag
 
 | Feature | Claude Flow v3 | CrewAI | LangGraph | AutoGen | MetaGPT |
 |---------|----------------|--------|-----------|---------|---------|
-| **Self-Learning** | SONA + EWC++ | - | - | - | - |
-| **Prevents Forgetting** | EWC++ consolidation | - | - | - | - |
-| **Expert Routing** | MoE (8 experts) | Manual roles | Graph edges | - | Fixed roles |
-| **Vector Memory** | HNSW (150x faster) | - | Via plugins | - | - |
-| **Hyperbolic Embeddings** | Poincaré ball model | - | - | - | - |
-| **Pattern Learning** | From trajectories | - | - | - | - |
-| **Work Ownership** | Claims system | - | - | - | - |
-| **Threat Detection** | AIDefence | - | - | - | - |
-| **Attention Optimization** | Flash Attention | - | - | - | - |
-| **Low-Rank Adaptation** | LoRA (128x compression) | - | - | - | - |
-| **Quantization** | Int8 (3.92x savings) | - | - | - | - |
-| **Consensus Protocols** | 5 (Raft, Byzantine, etc.) | - | - | - | - |
-| **Background Workers** | 12 auto-triggered | - | - | - | - |
+| **Self-Learning** | SONA + EWC++ | 🔴 | 🔴 | 🔴 | 🔴 |
+| **Prevents Forgetting** | EWC++ consolidation | 🔴 | 🔴 | 🔴 | 🔴 |
+| **Expert Routing** | MoE (8 experts) | Manual roles | Graph edges | 🔴 | Fixed roles |
+| **Vector Memory** | HNSW (150x faster) | 🔴 | Via plugins | 🔴 | 🔴 |
+| **Hyperbolic Embeddings** | Poincaré ball model | 🔴 | 🔴 | 🔴 | 🔴 |
+| **Pattern Learning** | From trajectories | 🔴 | 🔴 | 🔴 | 🔴 |
+| **Work Ownership** | Claims system | 🔴 | 🔴 | 🔴 | 🔴 |
+| **Threat Detection** | AIDefence | 🔴 | 🔴 | 🔴 | 🔴 |
+| **Attention Optimization** | Flash Attention | 🔴 | 🔴 | 🔴 | 🔴 |
+| **Low-Rank Adaptation** | LoRA (128x compression) | 🔴 | 🔴 | 🔴 | 🔴 |
+| **Quantization** | Int8 (3.92x savings) | 🔴 | 🔴 | 🔴 | 🔴 |
+| **Consensus Protocols** | 5 (Raft, Byzantine, etc.) | 🔴 | 🔴 | 🔴 | 🔴 |
+| **Background Workers** | 12 auto-triggered | 🔴 | 🔴 | 🔴 | 🔴 |
 | **Multi-Provider LLM** | 6 with failover | 2 | 3 | 2 | 1 |
-| **MCP Integration** | Native | - | - | - | - |
+| **MCP Integration** | Native | 🔴 | 🔴 | 🔴 | 🔴 |
 | **Swarm Topologies** | 4 (mesh, hierarchical, etc.) | 1 | 1 | 1 | 1 |
 
 **Key differentiators:**
