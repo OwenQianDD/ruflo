@@ -1930,7 +1930,7 @@ npx claude-flow@v3alpha hooks pretrain  # Bootstrap learning
 | 📚 Documentation | [github.com/ruvnet/claude-flow](https://github.com/ruvnet/claude-flow) |
 | 🐛 Issues & Bugs | [github.com/ruvnet/claude-flow/issues](https://github.com/ruvnet/claude-flow/issues) |
 | 💼 Professional Implementation | [ruv.io](https://ruv.io) — Enterprise consulting, custom integrations, and production deployment |
-- Discord: [Agentics Foundation](https://discord.com/invite/dfxmpwkG2D)
+| 💬 Discord Community | [Agentics Foundation](https://discord.com/invite/dfxmpwkG2D) |
 
 ## License
 
