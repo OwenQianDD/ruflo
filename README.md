@@ -3780,7 +3780,7 @@ docker run -d -p 5432:5432 ruvnet/ruvector-postgres
 | Package | Description | Performance |
 |---------|-------------|-------------|
 | **[ruvector](https://www.npmjs.com/package/ruvector)** | Core vector database with HNSW | 150x-12,500x faster search |
-| **[@ruvector/attention](https://www.npmjs.com/package/@ruvector/attention)** | Flash Attention mechanisms | 2.49x-7.47x speedup |
+| **[@ruvector/attention](https://www.npmjs.com/package/@ruvector/attention)** | 39 Attention mechanisms (Flash, Linear, Sparse, MoE) | 2.49x-7.47x speedup, 250x WASM |
 | **[@ruvector/sona](https://www.npmjs.com/package/@ruvector/sona)** | SONA adaptive learning (LoRA, EWC++) | <0.05ms adaptation |
 | **[@ruvector/gnn](https://www.npmjs.com/package/@ruvector/gnn)** | Graph Neural Networks | Native NAPI bindings |
 | **[@ruvector/graph-node](https://www.npmjs.com/package/@ruvector/graph-node)** | Graph DB with Cypher queries | 10x faster than WASM |
