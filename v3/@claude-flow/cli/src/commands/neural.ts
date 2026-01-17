@@ -45,7 +45,9 @@ const trainCommand: Command = {
         recordStep,
         recordTrajectory,
         getIntelligenceStats,
-        benchmarkAdaptation
+        benchmarkAdaptation,
+        flushPatterns,
+        getPersistenceStatus
       } = await import('../memory/intelligence.js');
       const { generateEmbedding } = await import('../memory/memory-initializer.js');
 
