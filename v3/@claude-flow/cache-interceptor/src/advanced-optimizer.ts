@@ -620,15 +620,16 @@ export class AdvancedOptimizer {
     }
 
     // Step 4: Select messages within budget
+    // CRITICAL: Respect tool_use/tool_result pairs to avoid API errors
     // Always keep summaries and system messages
-    const mustKeep: ParsedMessage[] = [];
+    const mustKeepIndices = new Set<number>();
     const candidates: typeof combinedScores = [];
 
     for (const item of combinedScores) {
       if (item.msg.parsed.type === 'summary') {
-        mustKeep.push(item.msg);
+        mustKeepIndices.add(item.index);
       } else if (item.msg.parsed.type === 'system') {
-        mustKeep.push(item.msg);
+        mustKeepIndices.add(item.index);
       } else {
         candidates.push(item);
       }
@@ -637,38 +638,70 @@ export class AdvancedOptimizer {
     // Sort by combined score (highest first)
     candidates.sort((a, b) => b.score - a.score);
 
-    // Build optimized output
-    const optimizedMessages: ParsedMessage[] = [...mustKeep];
-    let currentSize = mustKeep.reduce((sum, m) => sum + m.line.length, 0);
+    // Track which indices we're keeping
+    const keepIndices = new Set<number>(mustKeepIndices);
 
-    // Add recent messages (always keep last N)
-    const recentMessages = candidates
+    // Add recent messages (always keep last N) WITH their tool pairs
+    const recentCandidates = candidates
       .filter(c => c.msg.parsed.type === 'user' || c.msg.parsed.type === 'assistant')
       .slice(-this.config.keepRecentMessages);
 
-    for (const item of recentMessages) {
-      const tier = item.msg.tier!;
-      const compressedLine = this.temporalCompressor.compressMessage(item.msg, tier);
-
-      if (currentSize + compressedLine.length < this.config.targetSizeBytes) {
-        optimizedMessages.push({ ...item.msg, line: compressedLine });
-        currentSize += compressedLine.length;
+    for (const item of recentCandidates) {
+      keepIndices.add(item.index);
+      // If this message is part of a tool pair, keep the pair
+      if (toolUsePairs.toolUseToResult.has(item.index)) {
+        keepIndices.add(toolUsePairs.toolUseToResult.get(item.index)!);
+      }
+      if (toolUsePairs.resultToToolUse.has(item.index)) {
+        keepIndices.add(toolUsePairs.resultToToolUse.get(item.index)!);
       }
     }
 
-    // Fill remaining budget with high-scoring messages
+    // Fill remaining budget with high-scoring messages, respecting pairs
+    const addedFromCandidates = new Set<number>();
     for (const item of candidates) {
-      // Skip if already added as recent
-      if (recentMessages.some(r => r.index === item.index)) continue;
+      if (keepIndices.has(item.index)) continue;
+      if (addedFromCandidates.has(item.index)) continue;
 
-      const tier = item.msg.tier!;
-      const compressedLine = this.temporalCompressor.compressMessage(item.msg, tier);
+      // Calculate size needed (including pair if applicable)
+      let sizeNeeded = item.msg.line.length;
+      let pairIndex: number | undefined;
 
-      if (currentSize + compressedLine.length < this.config.targetSizeBytes) {
-        optimizedMessages.push({ ...item.msg, line: compressedLine });
-        currentSize += compressedLine.length;
-      } else {
-        break; // Budget exhausted
+      if (toolUsePairs.toolUseToResult.has(item.index)) {
+        pairIndex = toolUsePairs.toolUseToResult.get(item.index);
+        if (pairIndex !== undefined && !keepIndices.has(pairIndex)) {
+          sizeNeeded += parsedMessages[pairIndex].line.length;
+        }
+      } else if (toolUsePairs.resultToToolUse.has(item.index)) {
+        pairIndex = toolUsePairs.resultToToolUse.get(item.index);
+        if (pairIndex !== undefined && !keepIndices.has(pairIndex)) {
+          sizeNeeded += parsedMessages[pairIndex].line.length;
+        }
+      }
+
+      // Check if we can add this (and its pair)
+      const currentSize = [...keepIndices].reduce((sum, i) => sum + parsedMessages[i].line.length, 0);
+      if (currentSize + sizeNeeded < this.config.targetSizeBytes) {
+        keepIndices.add(item.index);
+        addedFromCandidates.add(item.index);
+        if (pairIndex !== undefined) {
+          keepIndices.add(pairIndex);
+          addedFromCandidates.add(pairIndex);
+        }
+      } else if (!toolUsePairs.pairedIndices.has(item.index)) {
+        // Only break early for non-paired messages (paired ones may have smaller partners)
+        break;
+      }
+    }
+
+    // Build final output maintaining original order
+    const optimizedMessages: ParsedMessage[] = [];
+    for (let i = 0; i < parsedMessages.length; i++) {
+      if (keepIndices.has(i)) {
+        const msg = parsedMessages[i];
+        const tier = msg.tier || 'hot';
+        const compressedLine = this.temporalCompressor.compressMessage(msg, tier);
+        optimizedMessages.push({ ...msg, line: compressedLine });
       }
     }
 
