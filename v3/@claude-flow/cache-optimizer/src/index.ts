@@ -108,3 +108,31 @@ export type {
   BenchmarkReport,
   TargetMetric,
 } from './benchmarks/metrics.js';
+
+// =============================================================================
+// Init - Project initialization and configuration profiles
+// =============================================================================
+export {
+  init,
+  reset,
+  validate,
+  status,
+  isInitialized,
+  getCurrentConfig,
+  getProfileOptions,
+  getProfile,
+  listProfiles,
+  detectRecommendedProfile,
+  mergeWithProfile,
+  PROFILES,
+  SettingsManager,
+  createSettingsManager,
+  type InitOptions,
+  type InitResult,
+  type ProfileId,
+  type Profile,
+  type HookConfiguration,
+  type HookEntry,
+  type ClaudeSettings,
+  type SettingsManagerConfig,
+} from './init/index.js';
