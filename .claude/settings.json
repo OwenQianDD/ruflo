@@ -433,6 +433,11 @@
             "type": "command",
             "timeout": 6000,
             "command": "node /workspaces/claude-flow/v3/@claude-flow/cli/bin/cli.js hooks worker detect --prompt \"$USER_PROMPT\" --auto-dispatch --min-confidence 0.6 2>/dev/null || true"
+          },
+          {
+            "type": "command",
+            "timeout": 2000,
+            "command": "/workspaces/claude-flow/.claude/helpers/cache-optimizer-hooks.sh record add \"prompt-$(date +%s)\" user_prompt '{}' 2>/dev/null || true"
           }
         ]
       }
