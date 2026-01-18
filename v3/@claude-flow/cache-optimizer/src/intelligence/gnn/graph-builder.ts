@@ -696,7 +696,7 @@ export class GraphBuilder {
 
   private kMeansClustering(
     entries: CacheEntry[],
-    nodes: Map<string, CacheNode>,
+    _nodes: Map<string, CacheNode>,
     k: number
   ): Map<number, string[]> {
     const clusters = new Map<number, string[]>();
