@@ -411,3 +411,18 @@ EOF
     exit 1
     ;;
 esac
+
+# Track metrics for improvement visibility
+track_metric() {
+  local METRIC="$1"
+  local VALUE="$2"
+  local METRICS_FILE="/workspaces/claude-flow/.claude-flow/cache-metrics.json"
+  
+  if [ -f "$METRICS_FILE" ]; then
+    # Increment counter
+    jq ".totals.$METRIC += $VALUE" "$METRICS_FILE" > "${METRICS_FILE}.tmp" 2>/dev/null && \
+    mv "${METRICS_FILE}.tmp" "$METRICS_FILE"
+  fi
+}
+
+# Call with: track_metric compactionsPrevented 1
