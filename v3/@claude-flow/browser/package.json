@@ -1,0 +1,53 @@
+{
+  "name": "@claude-flow/browser",
+  "version": "3.0.0-alpha.1",
+  "description": "Browser automation for AI agents - integrates agent-browser with claude-flow swarms",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./mcp-tools": "./dist/mcp-tools/index.js",
+    "./skill": "./dist/skill/index.js",
+    "./agent": "./dist/agent/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "agent-browser": "^0.6.0",
+    "agentic-flow": "^2.0.3",
+    "zod": "^3.22.4"
+  },
+  "peerDependencies": {
+    "@claude-flow/cli": "^3.0.0-alpha.140"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0",
+    "vitest": "^2.0.0"
+  },
+  "keywords": [
+    "browser",
+    "automation",
+    "ai-agent",
+    "claude-flow",
+    "playwright",
+    "web-scraping",
+    "testing"
+  ],
+  "author": "ruvnet",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ruvnet/claude-flow.git",
+    "directory": "v3/@claude-flow/browser"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
