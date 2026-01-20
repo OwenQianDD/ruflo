@@ -2843,7 +2843,7 @@ The system **remembers** what works and applies it to future similar tasks.
 ---
 
 <details>
-<summary><h2>💻 Programmatic SDK — Use Claude-Flow in Your Code</h2></summary>
+<summary>💻 <strong>Programmatic SDK</strong> — Use Claude-Flow in Your Code</summary>
 
 Use Claude-Flow packages directly in your TypeScript/JavaScript applications.
 
