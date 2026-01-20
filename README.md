@@ -4595,6 +4595,10 @@ const consensus = calculateSecurityConsensus(assessments);
 
 ---
 
+## 🏗️ Architecture & Modules
+
+Domain-driven design, performance benchmarks, and testing framework.
+
 <details>
 <summary>🏗️ <strong>Architecture</strong> — DDD Modules, Topology Benchmarks & Metrics</summary>
 
