@@ -5934,7 +5934,7 @@ cp -r ./data-backup-v2 ./data
 ---
 
 <details>
-<summary><h2>📚 Documentation </h2></summary>
+<summary>📚 <strong>Documentation</strong></summary>
 
 
 ### V3 Module Documentation
