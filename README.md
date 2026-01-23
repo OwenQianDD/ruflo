@@ -2044,6 +2044,189 @@ Shell-based daemons for monitoring (Linux/macOS only):
 ```
 
 </details>
+
+<details>
+<summary>⌨️ <strong>V3 CLI Commands</strong> — 26 commands with 140+ subcommands</summary>
+
+Complete command-line interface for all Claude-Flow operations.
+
+**Core Commands:**
+
+| Command | Subcommands | Description |
+|---------|-------------|-------------|
+| `init` | 4 | Project initialization with wizard, presets, skills, hooks |
+| `agent` | 8 | Agent lifecycle (spawn, list, status, stop, metrics, pool, health, logs) |
+| `swarm` | 6 | Multi-agent swarm coordination and orchestration |
+| `memory` | 11 | AgentDB memory with vector search (150x-12,500x faster) |
+| `mcp` | 9 | MCP server management and tool execution |
+| `task` | 6 | Task creation, assignment, and lifecycle |
+| `session` | 7 | Session state management and persistence |
+| `config` | 7 | Configuration management and provider setup |
+| `status` | 3 | System status monitoring with watch mode |
+| `start` | 3 | Service startup and quick launch |
+| `workflow` | 6 | Workflow execution and template management |
+| `hooks` | 17 | Self-learning hooks + 12 background workers |
+| `hive-mind` | 6 | Queen-led Byzantine fault-tolerant consensus |
+
+**Advanced Commands:**
+
+| Command | Subcommands | Description |
+|---------|-------------|-------------|
+| `daemon` | 5 | Background worker daemon (start, stop, status, trigger, enable) |
+| `neural` | 5 | Neural pattern training (train, status, patterns, predict, optimize) |
+| `security` | 6 | Security scanning (scan, audit, cve, threats, validate, report) |
+| `performance` | 5 | Performance profiling (benchmark, profile, metrics, optimize, report) |
+| `providers` | 5 | AI providers (list, add, remove, test, configure) |
+| `plugins` | 5 | Plugin management (list, install, uninstall, enable, disable) |
+| `deployment` | 5 | Deployment management (deploy, rollback, status, environments, release) |
+| `embeddings` | 4 | Vector embeddings (embed, batch, search, init) - 75x faster with agentic-flow |
+| `claims` | 4 | Claims-based authorization (check, grant, revoke, list) |
+| `migrate` | 5 | V2 to V3 migration with rollback support |
+| `process` | 4 | Background process management |
+| `doctor` | 1 | System diagnostics with health checks |
+| `completions` | 4 | Shell completions (bash, zsh, fish, powershell) |
+
+**Quick Examples:**
+
+```bash
+# Initialize project with wizard
+npx claude-flow@v3alpha init --wizard
+
+# Start daemon with background workers
+npx claude-flow@v3alpha daemon start
+
+# Spawn an agent with specific type
+npx claude-flow@v3alpha agent spawn -t coder --name my-coder
+
+# Initialize swarm with V3 mode
+npx claude-flow@v3alpha swarm init --v3-mode
+
+# Search memory (HNSW-indexed, 150x faster)
+npx claude-flow@v3alpha memory search -q "authentication patterns"
+
+# Run security scan
+npx claude-flow@v3alpha security scan --depth full
+
+# Performance benchmark
+npx claude-flow@v3alpha performance benchmark --suite all
+```
+
+</details>
+
+<details>
+<summary>🩺 <strong>Doctor Health Checks</strong> — System diagnostics with auto-fix</summary>
+
+Run `npx claude-flow@v3alpha doctor` to diagnose and fix common issues.
+
+**Health Checks Performed:**
+
+| Check | Requirement | Auto-Fix |
+|-------|-------------|----------|
+| **Node.js version** | 20+ | ❌ Manual upgrade required |
+| **npm version** | 9+ | ❌ Manual upgrade required |
+| **Git installation** | Any version | ❌ Manual install required |
+| **Config file validity** | Valid JSON/YAML | ✅ Regenerates defaults |
+| **Daemon status** | Running | ✅ Restarts daemons |
+| **Memory database** | SQLite writable | ✅ Recreates if corrupt |
+| **API keys** | Valid format | ❌ Manual configuration |
+| **MCP servers** | Responsive | ✅ Restarts unresponsive servers |
+| **Disk space** | >100MB free | ❌ Manual cleanup required |
+| **TypeScript** | Installed | ✅ Installs if missing |
+
+**Commands:**
+
+```bash
+# Run full diagnostics
+npx claude-flow@v3alpha doctor
+
+# Run diagnostics with auto-fix
+npx claude-flow@v3alpha doctor --fix
+
+# Check specific component
+npx claude-flow@v3alpha doctor --component memory
+
+# Verbose output
+npx claude-flow@v3alpha doctor --verbose
+```
+
+**Output Example:**
+
+```
+🩺 Claude-Flow Doctor v3.0.0-alpha
+
+✅ Node.js      20.11.0 (required: 20+)
+✅ npm          10.2.4 (required: 9+)
+✅ Git          2.43.0
+✅ Config       Valid claude-flow.config.json
+✅ Daemon       Running (PID: 12345)
+✅ Memory       SQLite healthy, 1.2MB
+⚠️ API Keys    ANTHROPIC_API_KEY set, OPENAI_API_KEY missing
+✅ MCP Server   Responsive (45ms latency)
+✅ Disk Space   2.4GB available
+
+Summary: 9/10 checks passed
+```
+
+</details>
+
+<details>
+<summary>📦 <strong>Embeddings Package v3</strong> — Cross-platform ONNX with hyperbolic support</summary>
+
+The embeddings package (v3.0.0-alpha.12) provides high-performance vector embeddings with multiple backends.
+
+**Key Features:**
+
+| Feature | Description | Performance |
+|---------|-------------|-------------|
+| **sql.js backend** | Cross-platform SQLite (WASM) | No native compilation needed |
+| **Document chunking** | Configurable overlap and size | Handles large documents |
+| **Normalization** | L2, L1, min-max, z-score | 4 normalization methods |
+| **Hyperbolic embeddings** | Poincaré ball model | Better hierarchical representation |
+| **agentic-flow ONNX** | Integrated ONNX runtime | 75x faster than API calls |
+| **Neural substrate** | RuVector integration | Full learning pipeline |
+
+**Models Available:**
+
+| Model | Dimensions | Speed | Quality |
+|-------|------------|-------|---------|
+| `all-MiniLM-L6-v2` | 384 | Fast | Good |
+| `all-mpnet-base-v2` | 768 | Medium | Better |
+
+**Usage:**
+
+```bash
+# Initialize embeddings system
+npx claude-flow@v3alpha embeddings init
+
+# Generate embedding for text
+npx claude-flow@v3alpha embeddings embed "authentication patterns"
+
+# Batch embed multiple texts
+npx claude-flow@v3alpha embeddings batch --file texts.txt
+
+# Search with semantic similarity
+npx claude-flow@v3alpha embeddings search "login flow" --top-k 5
+```
+
+**Programmatic:**
+
+```typescript
+import { createEmbeddingServiceAsync } from '@claude-flow/embeddings';
+
+const service = await createEmbeddingServiceAsync({
+  model: 'all-MiniLM-L6-v2',
+  hyperbolic: true,  // Enable Poincaré ball embeddings
+  cacheSize: 256
+});
+
+// Generate embedding
+const embedding = await service.embed("authentication flow");
+
+// Search similar patterns
+const results = await service.search("login", { topK: 5 });
+```
+
+</details>
 </details>
 
 ---
