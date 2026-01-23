@@ -1084,7 +1084,7 @@ export class AQEPlugin implements IPlugin {
     context: IPluginContext
   ): Promise<MCPToolResult> {
     // Validate path first
-    const securityModule = context.getSecurityModule();
+    const securityModule = context.getSecurityModule?.();
     if (securityModule) {
       const pathResult = await securityModule.pathValidator.validate(
         (input as { targetPath: string }).targetPath
