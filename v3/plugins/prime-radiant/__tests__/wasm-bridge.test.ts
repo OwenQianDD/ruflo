@@ -71,9 +71,9 @@ class MockWasmBridge {
     // Simulate WASM loading
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    // Create mock module
+    // Create mock module (initial: 128 pages = 8MB, under 10MB target)
     this.module = {
-      memory: new WebAssembly.Memory({ initial: 256 }),
+      memory: new WebAssembly.Memory({ initial: 128 }),
       ready: true,
       _malloc: (size: number) => 0,
       _free: (ptr: number) => {},
