@@ -809,8 +809,10 @@ export class AQEPlugin implements IPlugin {
   ): void {
     this.componentHealth.set(component, {
       name: component,
+      healthy: status === 'healthy',
       status,
       message,
+      lastCheck: Date.now(),
       lastSuccess: status === 'healthy' ? Date.now() : undefined,
     });
   }
