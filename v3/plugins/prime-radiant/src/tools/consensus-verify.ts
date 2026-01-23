@@ -65,7 +65,9 @@ function computeCoherenceEnergy(embeddings: number[][]): number {
 
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
-      const similarity = cosineSimilarity(embeddings[i], embeddings[j]);
+      const embi = embeddings[i]!;
+      const embj = embeddings[j]!;
+      const similarity = cosineSimilarity(embi, embj);
       const disagreement = 1 - Math.max(0, similarity);
       totalDisagreement += disagreement;
       edgeCount++;
