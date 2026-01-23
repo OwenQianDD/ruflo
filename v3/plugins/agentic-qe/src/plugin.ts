@@ -1005,30 +1005,35 @@ export class AQEPlugin implements IPlugin {
   private getHooks(): QEHookDefinition[] {
     return [
       {
+        name: 'pre-test-execution',
         event: 'pre-test-execution',
         description: 'Validate test environment before execution',
         priority: 'high',
         handler: 'handlePreTestExecution',
       },
       {
+        name: 'pre-security-scan',
         event: 'pre-security-scan',
         description: 'Validate scan targets and permissions',
         priority: 'critical',
         handler: 'handlePreSecurityScan',
       },
       {
+        name: 'post-test-execution',
         event: 'post-test-execution',
         description: 'Store test results and learn patterns',
         priority: 'normal',
         handler: 'handlePostTestExecution',
       },
       {
+        name: 'post-coverage-analysis',
         event: 'post-coverage-analysis',
         description: 'Store coverage data and update trends',
         priority: 'normal',
         handler: 'handlePostCoverageAnalysis',
       },
       {
+        name: 'post-security-scan',
         event: 'post-security-scan',
         description: 'Store findings and update compliance status',
         priority: 'high',
