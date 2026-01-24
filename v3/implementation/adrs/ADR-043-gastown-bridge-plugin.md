@@ -880,8 +880,20 @@ User Request → MCP Tool → Route Decision
 
 ## References
 
+### Gas Town
 - [Gas Town GitHub](https://github.com/steveyegge/gastown)
 - [Beads GitHub](https://github.com/steveyegge/beads)
 - [ADR-042: Gas Town Analysis](./ADR-042-gas-town-analysis.md)
 - [Gas Town Formula Types](https://github.com/steveyegge/gastown/blob/main/internal/formula/types.go)
 - [Gas Town Plugin System](https://github.com/steveyegge/gastown/blob/main/internal/plugin/types.go)
+- [Welcome to Gas Town (Steve Yegge)](https://steve-yegge.medium.com/welcome-to-gas-town-4f25ee16dd04)
+
+### RuVector WASM Plugins (Shared Dependencies)
+- [ADR-035: RuVector GNN WASM](./ADR-035-ruvector-gnn-wasm.md) - Graph operations
+- [ADR-036: Micro HNSW WASM](./ADR-036-micro-hnsw-wasm.md) - Pattern search
+- [ADR-037: RuVector Learning WASM](./ADR-037-ruvector-learning-wasm.md) - Optimization
+- [ADR-032: RuVector WASM Plugins Architecture](./ADR-032-ruvector-wasm-plugins.md)
+
+### Claude Flow V3
+- [ADR-006: Unified Memory Service](./ADR-006-unified-memory-service.md)
+- [ADR-001: Deep Agentic Flow Integration](./ADR-001-deep-agentic-flow-integration.md)
