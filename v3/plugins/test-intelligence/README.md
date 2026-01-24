@@ -373,6 +373,14 @@ Execution History --> SONA Learning --> RL Policy
 - `sona`: Continuous learning from test execution history
 - `istanbul-lib-coverage`: Coverage report parsing
 
+## Related Plugins
+
+| Plugin | Description | Use Case |
+|--------|-------------|----------|
+| [@claude-flow/plugin-code-intelligence](../code-intelligence) | Code analysis | Impact analysis for test prioritization |
+| [@claude-flow/plugin-perf-optimizer](../perf-optimizer) | Performance optimization | Test performance profiling |
+| [@claude-flow/plugin-financial-risk](../financial-risk) | Risk analysis | Test risk scoring for critical paths |
+
 ## License
 
 MIT License
