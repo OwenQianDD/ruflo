@@ -1391,7 +1391,7 @@ export class GasTownBridgePlugin extends EventEmitter implements IPlugin {
         // Fallback if no WASM
         throw new GasTownError('WASM not initialized for formula cooking', GasTownErrorCode.NOT_INITIALIZED);
       },
-      async executeFormula(_formula: Formula | string, _vars: Record<string, string>, _targetAgent?: string, _dryRun?: boolean) {
+      async executeFormula(_formula, _vars, _targetAgent, _dryRun): Promise<{ beads_created: string[] }> {
         // Formula execution requires the FormulaExecutor
         throw new GasTownError('Use FormulaExecutor.execute() for formula execution', GasTownErrorCode.NOT_INITIALIZED);
       },
