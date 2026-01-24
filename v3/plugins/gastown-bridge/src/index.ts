@@ -1377,10 +1377,10 @@ export class GasTownBridgePlugin extends EventEmitter implements IPlugin {
           await tracker.removeIssues(convoyId, issues);
         }
       },
-      async listFormulas(_type?: string, _includeBuiltin?: boolean) {
+      async listFormulas(_type, _includeBuiltin) {
         // No direct CLI command - return empty for now
         // Would need to scan formula directories
-        return [] as Formula[];
+        return [] as Array<{ name: string; type: import('./types.js').FormulaType; description: string; builtin: boolean }>;
       },
       async cookFormula(formula: Formula | string, vars: Record<string, string>) {
         // Use WasmLoaderAdapter for cooking
