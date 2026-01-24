@@ -38,7 +38,7 @@ export {
 export type { MCPTool, ToolContext, MCPToolResult } from './mcp-tools.js';
 
 // Import for plugin creation
-import { codeIntelligenceTools, createToolContext } from './mcp-tools.js';
+import { codeIntelligenceTools } from './mcp-tools.js';
 import { createGNNBridge } from './bridges/gnn-bridge.js';
 import { createMinCutBridge } from './bridges/mincut-bridge.js';
 import type {
