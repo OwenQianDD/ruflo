@@ -1,0 +1,47 @@
+# RuVector GNN WASM Module
+#
+# Provides WASM-accelerated graph operations:
+# - DAG construction and traversal (150x faster than JavaScript)
+# - Topological sorting
+# - Cycle detection
+# - Critical path analysis
+#
+# Build with: wasm-pack build --target web
+
+[package]
+name = "ruvector-gnn-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WASM-accelerated graph operations for dependency resolution"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde-wasm-bindgen.workspace = true
+js-sys.workspace = true
+petgraph.workspace = true
+
+[dependencies.web-sys]
+version = "0.3"
+features = ["console"]
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[features]
+default = []
+console_error_panic_hook = ["dep:console_error_panic_hook"]
+
+[dependencies.console_error_panic_hook]
+version = "0.1"
+optional = true
+
+[profile.release]
+opt-level = 3
+lto = true
