@@ -628,6 +628,13 @@ export class BdBridge {
       return [];
     }
 
+    // Check parsed cache first
+    const cacheKey = hashArgs([output]);
+    const cached = parsedCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const lines = output.trim().split('\n');
     const beads: Bead[] = [];
     const errors: Array<{ line: number; error: string }> = [];
@@ -640,6 +647,9 @@ export class BdBridge {
         const parsed = JSON.parse(line);
         const validated = BeadSchema.parse(parsed);
         beads.push(validated);
+
+        // Also cache individual beads
+        singleBeadCache.set(validated.id, validated);
       } catch (error) {
         errors.push({
           line: i + 1,
@@ -656,6 +666,9 @@ export class BdBridge {
         firstErrors: errors.slice(0, 3),
       });
     }
+
+    // Cache the parsed result
+    parsedCache.set(cacheKey, beads);
 
     return beads;
   }
