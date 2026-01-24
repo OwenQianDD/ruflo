@@ -417,7 +417,7 @@ export interface LearningBridgeInterface {
   // RL operations for test selection
   trainOnHistory(history: TestHistoryEntry[], config?: LearningConfig): Promise<number>;
   predictFailingTests(changes: CodeChange[], topK: number): Promise<PredictedTest[]>;
-  updatePolicy(feedback: TestFeedback): Promise<void>;
+  updatePolicyWithFeedback(feedback: TestFeedback): Promise<void>;
 }
 
 export interface SonaBridgeInterface {
