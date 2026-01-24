@@ -1323,6 +1323,9 @@ npm install @claude-flow/plugin-agentic-qe
 # Install AI Interpretability plugin
 npm install @claude-flow/plugin-prime-radiant
 
+# Install Gas Town Bridge plugin (WASM-accelerated orchestration)
+npx claude-flow@latest plugins install -n @claude-flow/plugin-gastown-bridge
+
 # Install domain-specific plugins
 npm install @claude-flow/plugin-healthcare-clinical
 npm install @claude-flow/plugin-financial-risk
