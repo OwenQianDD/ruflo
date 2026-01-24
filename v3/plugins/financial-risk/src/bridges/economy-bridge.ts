@@ -472,7 +472,7 @@ export class FinancialEconomyBridge implements EconomyBridge {
 
   private async resolveWasmPath(): Promise<string | null> {
     try {
-      const module = await import('ruvector-economy-wasm');
+      const module = await import(/* webpackIgnore: true */ 'ruvector-economy-wasm' as string) as { default?: string };
       return module.default ?? null;
     } catch {
       return null;
