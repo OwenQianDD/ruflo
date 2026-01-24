@@ -212,13 +212,22 @@ Contract Types (Hyperbolic Embedding)
 
 ## Performance Targets
 
-| Metric | Target |
-|--------|--------|
-| Clause extraction | <2s for 50-page contract |
-| Risk assessment | <5s full analysis |
-| Contract comparison | <10s for two 100-page contracts |
-| Obligation extraction | <3s per contract |
-| Playbook matching | <1s per clause |
+| Metric | Target | Baseline (Traditional) | Improvement |
+|--------|--------|------------------------|-------------|
+| Clause extraction | <2s for 50-page contract | ~10min (manual) | 300x |
+| Risk assessment | <5s full analysis | ~2hr (attorney review) | 1440x |
+| Contract comparison | <10s for two 100-page contracts | ~4hr (redlining) | 1440x |
+| Obligation extraction | <3s per contract | ~30min (paralegal) | 600x |
+| Playbook matching | <1s per clause | ~5min (lookup) | 300x |
+
+## Risk Assessment
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| Missed critical clause | Low | High | Confidence scores, mandatory human review for low confidence |
+| Privilege breach | Low | Critical | On-device processing, no cloud transmission |
+| Jurisdictional errors | Medium | Medium | Multi-jurisdiction training, jurisdiction flagging |
+| Over-reliance on AI | Medium | High | Clear disclaimers, attorney-in-the-loop design |
 
 ## Privacy & Privilege
 
