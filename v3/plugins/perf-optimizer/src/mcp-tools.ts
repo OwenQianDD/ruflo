@@ -999,7 +999,9 @@ function generateMockConfigOptimization(
   objective: string
 ): { recommendations: ConfigParameter[]; predictedImprovement: { latency: number; throughput: number; cost: number } } {
   const recommendations: ConfigParameter[] = [];
-  const workloadType = (workload as { type?: string }).type ?? 'web';
+  // Extract workload type for future workload-specific optimization
+  const _workloadType = (workload as { type?: string }).type ?? 'web';
+  void _workloadType;
 
   for (const [name, spec] of Object.entries(configSpace)) {
     const paramSpec = spec as { type: string; range?: unknown[]; current: unknown };
