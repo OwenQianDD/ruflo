@@ -861,9 +861,9 @@ export interface IBeadsSyncService {
 export interface IFormulaWasm {
   isInitialized(): boolean;
   initialize(): Promise<void>;
-  parseFormula(content: string, validate?: boolean): Promise<{ type: FormulaType; name: string; steps: Step[] }>;
+  parseFormula(content: string, validate?: boolean): Promise<Formula>;
   cookFormula(formula: Formula | string, vars: Record<string, string>, isContent?: boolean): Promise<CookedFormula>;
-  cookBatch(formulas: Array<{ name: string; content: string }>, vars: Record<string, string>[], continueOnError?: boolean): Promise<{ cooked: CookedFormula[]; errors: string[] }>;
+  cookBatch(formulas: Array<{ name: string; content: string }>, vars: Record<string, string>[], continueOnError?: boolean): Promise<{ cooked: CookedFormula[]; errors: Array<{ index: number; error: string }> }>;
 }
 
 /**
