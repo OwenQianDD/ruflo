@@ -29,11 +29,32 @@ js-sys = "0.3"
 petgraph = "0.6"
 
 [profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
+# Ultra-optimization for smallest bundle size (<50KB per module)
+opt-level = "z"           # Optimize for size (smallest)
+lto = "fat"               # Full LTO for cross-crate optimization
+codegen-units = 1         # Single codegen unit for better optimization
+panic = "abort"           # No panic unwinding (smaller code)
+strip = "symbols"         # Strip all symbols
+debug = false             # No debug info
+incremental = false       # Disable incremental (better optimization)
+overflow-checks = false   # Disable overflow checks in release
 
+[profile.release.package."*"]
+opt-level = "z"
+strip = "symbols"
+
+# Special WASM profile with maximum size reduction
 [profile.release-wasm]
 inherits = "release"
 opt-level = "z"
-lto = true
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+# Dev profile - faster builds for development
+[profile.dev]
+opt-level = 0
+debug = true
+lto = false
+incremental = true
