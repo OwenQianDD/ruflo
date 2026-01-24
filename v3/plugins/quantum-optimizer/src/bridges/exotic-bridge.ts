@@ -219,7 +219,7 @@ export class ExoticBridge {
 
       if (energy < bestEnergy) {
         bestEnergy = energy;
-        bestAssignment = assignment;
+        bestAssignment = new Uint8Array(assignment);
       }
 
       // Update parameters using gradient-free optimization
