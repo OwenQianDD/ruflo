@@ -354,7 +354,7 @@ async function clinicalPathwaysHandler(
     const pathway = (gnnBridge as HealthcareGNNBridge).getClinicalPathway(primaryDiagnosis);
 
     const recommendedPathways = pathway ? [pathway] : [];
-    const alternativePathways = [];
+    const alternativePathways: typeof recommendedPathways = [];
     const contraindicated: string[] = [];
 
     // Check for contraindications based on constraints
