@@ -229,8 +229,8 @@ export async function loadFormulaWasm(): Promise<FormulaWasmExports | null> {
   }
 
   try {
-    // Dynamic import of WASM module
-    const module = await import('gastown-formula-wasm') as FormulaWasmExports;
+    // Dynamic import of WASM module - use unknown intermediate cast
+    const module = await import('gastown-formula-wasm') as unknown as FormulaWasmExports;
 
     // Initialize if needed
     if (typeof module.default === 'function') {
