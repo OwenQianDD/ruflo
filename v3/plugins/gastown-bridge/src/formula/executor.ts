@@ -644,6 +644,12 @@ export class FormulaExecutor extends EventEmitter {
   /** Cancellation controllers */
   private readonly cancellations: Map<string, AbortController> = new Map();
 
+  /** Debounced progress emitters per execution */
+  private readonly progressEmitters: Map<string, DebouncedEmitter<ExecutionProgress>> = new Map();
+
+  /** Default max parallel workers */
+  private readonly defaultMaxParallel = 4;
+
   constructor(
     gtBridge: GtBridge,
     wasmLoader?: IWasmLoader,
