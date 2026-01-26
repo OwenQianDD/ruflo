@@ -372,6 +372,7 @@ main() {
     verify_installation
     setup_mcp_server
     run_doctor
+    run_init
     show_quickstart
 
     print_success "${BOLD}Claude Flow is ready!${NC} 🎉"
