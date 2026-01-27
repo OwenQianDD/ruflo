@@ -101,7 +101,6 @@ async function getMemoryFunctions() {
     deleteEntry,
     initializeMemoryDatabase,
     checkMemoryInitialization,
-    generateEmbedding,
   } = await import('../memory/memory-initializer.js');
 
   return {
@@ -112,7 +111,6 @@ async function getMemoryFunctions() {
     deleteEntry,
     initializeMemoryDatabase,
     checkMemoryInitialization,
-    generateEmbedding,
   };
 }
 
@@ -137,17 +135,13 @@ async function ensureInitialized(): Promise<void> {
 
       for (const [key, entry] of Object.entries(legacyStore.entries)) {
         try {
+          // Convert value to string for storage
+          const value = typeof entry.value === 'string' ? entry.value : JSON.stringify(entry.value);
           await storeEntry({
             key,
+            value,
             namespace: 'default',
-            content: typeof entry.value === 'string' ? entry.value : JSON.stringify(entry.value),
-            type: 'semantic',
-            metadata: {
-              ...entry.metadata,
-              legacyStoredAt: entry.storedAt,
-              legacyAccessCount: entry.accessCount,
-              migratedFrom: 'json',
-            },
+            generateEmbeddingFlag: true,
           });
           migrated++;
         } catch (e) {
@@ -172,12 +166,6 @@ export const memoryTools: MCPTool[] = [
         key: { type: 'string', description: 'Memory key (unique within namespace)' },
         value: { description: 'Value to store (string or object)' },
         namespace: { type: 'string', description: 'Namespace for organization (default: "default")' },
-        metadata: { type: 'object', description: 'Optional metadata' },
-        type: {
-          type: 'string',
-          enum: ['semantic', 'episodic', 'procedural', 'working', 'pattern'],
-          description: 'Memory type (default: "semantic")',
-        },
         tags: {
           type: 'array',
           items: { type: 'string' },
@@ -193,9 +181,7 @@ export const memoryTools: MCPTool[] = [
 
       const key = input.key as string;
       const namespace = (input.namespace as string) || 'default';
-      const content = typeof input.value === 'string' ? input.value : JSON.stringify(input.value);
-      const type = (input.type as string) || 'semantic';
-      const metadata = (input.metadata as Record<string, unknown>) || {};
+      const value = typeof input.value === 'string' ? input.value : JSON.stringify(input.value);
       const tags = (input.tags as string[]) || [];
       const ttl = input.ttl as number | undefined;
 
@@ -204,10 +190,9 @@ export const memoryTools: MCPTool[] = [
       try {
         const result = await storeEntry({
           key,
+          value,
           namespace,
-          content,
-          type: type as 'semantic' | 'episodic' | 'procedural' | 'working' | 'pattern',
-          metadata,
+          generateEmbeddingFlag: true,
           tags,
           ttl,
         });
@@ -215,15 +200,16 @@ export const memoryTools: MCPTool[] = [
         const duration = performance.now() - startTime;
 
         return {
-          success: true,
+          success: result.success,
           key,
           namespace,
-          stored: true,
+          stored: result.success,
           storedAt: new Date().toISOString(),
-          hasEmbedding: result.hasEmbedding || false,
-          embeddingDimensions: result.embeddingDimensions || null,
+          hasEmbedding: !!result.embedding,
+          embeddingDimensions: result.embedding?.dimensions || null,
           backend: 'sql.js + HNSW',
           storeTime: `${duration.toFixed(2)}ms`,
+          error: result.error,
         };
       } catch (error) {
         return {
@@ -269,12 +255,11 @@ export const memoryTools: MCPTool[] = [
             key,
             namespace,
             value,
-            metadata: result.entry.metadata,
-            type: result.entry.type,
             tags: result.entry.tags,
             storedAt: result.entry.createdAt,
             updatedAt: result.entry.updatedAt,
             accessCount: result.entry.accessCount,
+            hasEmbedding: result.entry.hasEmbedding,
             found: true,
             backend: 'sql.js + HNSW',
           };
@@ -305,19 +290,9 @@ export const memoryTools: MCPTool[] = [
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Search query (semantic similarity)' },
-        namespace: { type: 'string', description: 'Namespace to search (default: all)' },
+        namespace: { type: 'string', description: 'Namespace to search (default: "default")' },
         limit: { type: 'number', description: 'Maximum results (default: 10)' },
         threshold: { type: 'number', description: 'Minimum similarity threshold 0-1 (default: 0.3)' },
-        type: {
-          type: 'string',
-          enum: ['semantic', 'episodic', 'procedural', 'working', 'pattern'],
-          description: 'Filter by memory type',
-        },
-        tags: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Filter by tags (any match)',
-        },
       },
       required: ['query'],
     },
@@ -326,11 +301,9 @@ export const memoryTools: MCPTool[] = [
       const { searchEntries } = await getMemoryFunctions();
 
       const query = input.query as string;
-      const namespace = input.namespace as string | undefined;
+      const namespace = (input.namespace as string) || 'default';
       const limit = (input.limit as number) || 10;
       const threshold = (input.threshold as number) || 0.3;
-      const type = input.type as string | undefined;
-      const tags = input.tags as string[] | undefined;
 
       const startTime = performance.now();
 
@@ -340,8 +313,6 @@ export const memoryTools: MCPTool[] = [
           namespace,
           limit,
           threshold,
-          type: type as 'semantic' | 'episodic' | 'procedural' | 'working' | 'pattern' | undefined,
-          tags,
         });
 
         const duration = performance.now() - startTime;
@@ -359,10 +330,7 @@ export const memoryTools: MCPTool[] = [
             key: r.key,
             namespace: r.namespace,
             value,
-            similarity: r.similarity,
-            type: r.type,
-            tags: r.tags,
-            storedAt: r.createdAt,
+            similarity: r.score,
           };
         });
 
@@ -371,9 +339,7 @@ export const memoryTools: MCPTool[] = [
           results,
           total: results.length,
           searchTime: `${duration.toFixed(2)}ms`,
-          backend: result.searchMethod || 'HNSW',
-          embeddingGenerated: result.embeddingGenerated || false,
-          hnswStatus: result.hnswStatus || null,
+          backend: 'HNSW + sql.js',
         };
       } catch (error) {
         return {
@@ -433,11 +399,6 @@ export const memoryTools: MCPTool[] = [
       type: 'object',
       properties: {
         namespace: { type: 'string', description: 'Filter by namespace' },
-        type: {
-          type: 'string',
-          enum: ['semantic', 'episodic', 'procedural', 'working', 'pattern'],
-          description: 'Filter by memory type',
-        },
         limit: { type: 'number', description: 'Maximum results (default: 50)' },
         offset: { type: 'number', description: 'Offset for pagination (default: 0)' },
       },
@@ -447,39 +408,25 @@ export const memoryTools: MCPTool[] = [
       const { listEntries } = await getMemoryFunctions();
 
       const namespace = input.namespace as string | undefined;
-      const type = input.type as string | undefined;
       const limit = (input.limit as number) || 50;
       const offset = (input.offset as number) || 0;
 
       try {
         const result = await listEntries({
           namespace,
-          type: type as 'semantic' | 'episodic' | 'procedural' | 'working' | 'pattern' | undefined,
           limit,
           offset,
         });
 
-        const entries = result.entries.map(e => {
-          let preview: string;
-          try {
-            const parsed = JSON.parse(e.content);
-            preview = typeof parsed === 'string'
-              ? parsed.substring(0, 50)
-              : JSON.stringify(parsed).substring(0, 50);
-          } catch {
-            preview = e.content.substring(0, 50);
-          }
-
-          return {
-            key: e.key,
-            namespace: e.namespace,
-            type: e.type,
-            storedAt: e.createdAt,
-            accessCount: e.accessCount,
-            hasEmbedding: e.hasEmbedding,
-            preview: preview + (e.content.length > 50 ? '...' : ''),
-          };
-        });
+        const entries = result.entries.map(e => ({
+          key: e.key,
+          namespace: e.namespace,
+          storedAt: e.createdAt,
+          updatedAt: e.updatedAt,
+          accessCount: e.accessCount,
+          hasEmbedding: e.hasEmbedding,
+          size: e.size,
+        }));
 
         return {
           entries,
@@ -513,16 +460,14 @@ export const memoryTools: MCPTool[] = [
 
       try {
         const status = await checkMemoryInitialization();
-        const allEntries = await listEntries({ limit: 1000000 });
+        const allEntries = await listEntries({ limit: 100000 });
 
         // Count by namespace
         const namespaces: Record<string, number> = {};
-        const types: Record<string, number> = {};
         let withEmbeddings = 0;
 
         for (const entry of allEntries.entries) {
           namespaces[entry.namespace] = (namespaces[entry.namespace] || 0) + 1;
-          types[entry.type || 'unknown'] = (types[entry.type || 'unknown'] || 0) + 1;
           if (entry.hasEmbedding) withEmbeddings++;
         }
 
@@ -534,17 +479,12 @@ export const memoryTools: MCPTool[] = [
             ? `${((withEmbeddings / allEntries.total) * 100).toFixed(1)}%`
             : '0%',
           namespaces,
-          types,
           backend: 'sql.js + HNSW',
-          dbPath: status.dbPath,
-          schemaVersion: status.schemaVersion,
-          hnswEnabled: true,
-          features: {
-            semanticSearch: true,
+          version: status.version || '3.0.0',
+          features: status.features || {
             vectorEmbeddings: true,
             hnswIndex: true,
-            quantization: true,
-            temporalDecay: true,
+            semanticSearch: true,
           },
         };
       } catch (error) {
