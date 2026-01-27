@@ -44,6 +44,7 @@ dependencies:
   optional:
     - "@claude-flow/embeddings": ">=3.0.0"  # For embedding generation
     - "@claude-flow/aidefence": ">=3.0.0"   # For enhanced threat detection
+    - "aidefence": ">=2.2.0"                # Standalone AIMDS (alternative)
 
 # Capabilities provided by this plugin
 capabilities:
