@@ -182,6 +182,7 @@ The compiler splits `CLAUDE.md` into two parts:
 | | `optimizeForSize` | Context-size-aware optimization (compact / standard / full) |
 | | `headlessBenchmark` | Headless `claude -p` benchmarking with proof chain |
 | | `validateEffect` | Empirical behavioral validation with Pearson r, Spearman ρ, Cohen's d |
+| | `abBenchmark` | A/B measurement harness: 20 tasks, 7 classes, composite score, category shift detection |
 
 ## WASM Policy Kernel
 
@@ -903,6 +904,51 @@ class MyExecutor implements IContentAwareExecutor {
 }
 ```
 
+### A/B Benchmark Harness
+
+The `abBenchmark()` function implements the Measurement Plan: run 20 real tasks drawn from Claude Flow repo history under two configs — **A** (no control plane) vs **B** (with Phase 1 guidance) — and compute KPIs, composite scores, and category shift detection.
+
+```typescript
+import { abBenchmark, getDefaultABTasks } from '@claude-flow/guidance/analyzer';
+
+// Run A/B benchmark with content-aware executor
+const report = await abBenchmark(claudeMdContent, {
+  executor: myContentAwareExecutor,
+  proofKey: 'ab-audit-key',  // optional proof chain
+});
+
+// Composite scores and delta
+console.log(report.configA.metrics.compositeScore); // baseline
+console.log(report.configB.metrics.compositeScore); // with guidance
+console.log(report.compositeDelta);                 // B - A
+
+// Per-task-class breakdown (7 classes)
+console.log(report.configB.metrics.classSuccessRates);
+// { 'bug-fix': 1.0, 'feature': 0.8, 'refactor': 1.0, ... }
+
+// Category shift: B beats A by ≥0.2 across ≥3 classes
+console.log(report.categoryShift); // true / false
+
+// KPIs
+console.log(report.configB.metrics.successRate);       // 0-1
+console.log(report.configB.metrics.totalViolations);   // gate violations
+console.log(report.configB.metrics.humanInterventions); // critical violations
+console.log(report.configB.metrics.avgToolCalls);      // per task
+
+// Replayable failure ledger
+const failures = report.configB.taskResults.filter(r => !r.passed);
+console.log(failures);  // assertion details + gate violations + output
+
+// Full formatted report
+console.log(report.report);
+```
+
+**Composite score formula**: `score = success_rate − 0.1 × normalized_cost − 0.2 × violations − 0.1 × interventions`
+
+**20 tasks across 7 classes**: bug-fix (3), feature (5), refactor (3), security (3), deployment (2), test (2), performance (2)
+
+**Gate simulation** detects: destructive commands, hardcoded secrets, force push, unsafe types, skipped hooks, missing tests, policy violations.
+
 ## Per-Module Impact
 
 | # | Module | Key Metric | Improvement |
@@ -949,7 +995,7 @@ Lead with deterministic tools + replay + continue gate. Sell memory governance a
 
 ## Test Suite
 
-1,290 tests across 26 test files.
+1,328 tests across 26 test files.
 
 ```bash
 npm test                # run all tests
@@ -984,7 +1030,7 @@ npm run test:coverage   # with coverage
 | wasm-kernel | 15 | Output parity JS/WASM, 10k event throughput, batch API |
 | benchmark | 23 | Performance benchmarks across 11 modules |
 | generators | 68 | CLAUDE.md scaffolding, profiles, skills, agents, full scaffold |
-| analyzer | 134 | 6-dimension scoring, optimization, headless benchmarking, empirical validation, Pearson/Spearman/Cohen's d, content-aware executors, proof chains |
+| analyzer | 172 | 6-dimension scoring, optimization, headless benchmarking, empirical validation, Pearson/Spearman/Cohen's d, content-aware executors, A/B benchmark harness, proof chains |
 
 ## ADR Index
 

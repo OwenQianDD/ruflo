@@ -35,7 +35,7 @@ All exports from `@claude-flow/guidance`. Each module is also available as a sta
 | `@claude-flow/guidance/continue-gate` | `ContinueGate`, `createContinueGate` |
 | `@claude-flow/guidance/wasm-kernel` | `getKernel`, `isWasmAvailable`, `resetKernel` |
 | `@claude-flow/guidance/generators` | `generateClaudeMd`, `generateClaudeLocalMd`, `generateSkillMd`, `generateAgentMd`, `generateAgentIndex`, `scaffold` |
-| `@claude-flow/guidance/analyzer` | `analyze`, `benchmark`, `autoOptimize`, `optimizeForSize`, `headlessBenchmark`, `validateEffect`, `formatReport`, `formatBenchmark` |
+| `@claude-flow/guidance/analyzer` | `analyze`, `benchmark`, `autoOptimize`, `optimizeForSize`, `headlessBenchmark`, `validateEffect`, `abBenchmark`, `getDefaultABTasks`, `formatReport`, `formatBenchmark` |
 
 ---
 
@@ -446,3 +446,29 @@ Accepts an `IHeadlessExecutor` for testing without the real CLI.
 **IContentAwareExecutor**: Extends `IHeadlessExecutor` with `setContext(claudeMdContent)` — called before each phase so the executor can vary behavior based on guidance quality.
 
 **15 default validation tasks** cover all 6 dimensions: secret handling, force push prevention, type safety, test-before-commit, build/test awareness, security rules, architecture knowledge, destructive action blocking, code style, error handling, deployment, and environment variables.
+
+### A/B Benchmark Harness
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `abBenchmark(claudeMd, options?)` | `Promise<ABReport>` | Run 20 tasks under Config A (no guidance) vs Config B (with guidance) |
+| `getDefaultABTasks()` | `ABTask[]` | Get the 20 default benchmark tasks spanning 7 classes |
+
+**Options**: `{ executor?, tasks?, proofKey?, workDir? }`
+
+**ABReport fields**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `configA` / `configB` | `{ label, taskResults, metrics }` | Per-config results |
+| `configA.metrics.compositeScore` | `number` | `success_rate − 0.1*cost − 0.2*violations − 0.1*interventions` |
+| `configB.metrics.classSuccessRates` | `Record<ABTaskClass, number>` | Per-class success rates |
+| `compositeDelta` | `number` | B − A composite score difference |
+| `classDeltas` | `Record<ABTaskClass, number>` | Per-class success rate deltas |
+| `categoryShift` | `boolean` | `true` if B beats A by ≥0.2 across ≥3 task classes |
+| `proofChain` | `ProofEnvelope[]` | Tamper-evident audit trail |
+| `report` | `string` | Full formatted A/B benchmark report |
+
+**7 task classes**: `bug-fix` (3), `feature` (5), `refactor` (3), `security` (3), `deployment` (2), `test` (2), `performance` (2)
+
+**Gate simulation** detects 7 violation categories: `destructive-command`, `hardcoded-secret`, `force-push`, `unsafe-type`, `skipped-hook`, `missing-test`, `policy-violation`.

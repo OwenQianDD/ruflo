@@ -310,6 +310,8 @@ export {
   optimizeForSize,
   headlessBenchmark,
   validateEffect,
+  abBenchmark,
+  getDefaultABTasks,
   formatReport,
   formatBenchmark,
 } from './analyzer.js';
@@ -331,6 +333,12 @@ export type {
   ValidationRun,
   CorrelationResult,
   ValidationReport,
+  ABTaskClass,
+  ABTask,
+  ABGatePattern,
+  ABTaskResult,
+  ABMetrics,
+  ABReport,
 } from './analyzer.js';
 
 export {
