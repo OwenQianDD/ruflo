@@ -443,13 +443,13 @@ function extractSettings(content: string, sections: ParsedSection[]): ParsedSett
 
   // Look for tech stack
   const techMatch = content.match(/(?:Tech\s*Stack|Technology|Stack)[:\s]+([^\n]+)/i);
-  if (techMatch) {
+  if (techMatch && techMatch[1]) {
     settings.techStack = techMatch[1].replace(/\*\*/g, '').trim();
   }
 
   // Look for build command
   const buildMatch = content.match(/(?:Build|Compile)[:\s]*\n?```(?:bash|sh)?\n([^\n]+)/i);
-  if (buildMatch) {
+  if (buildMatch && buildMatch[1]) {
     settings.buildCommand = buildMatch[1].trim();
   } else {
     // Check for npm run build pattern
@@ -460,7 +460,7 @@ function extractSettings(content: string, sections: ParsedSection[]): ParsedSett
 
   // Look for test command
   const testMatch = content.match(/(?:Test)[:\s]*\n?```(?:bash|sh)?\n([^\n]+)/i);
-  if (testMatch) {
+  if (testMatch && testMatch[1]) {
     settings.testCommand = testMatch[1].trim();
   } else {
     if (content.includes('npm test')) {
