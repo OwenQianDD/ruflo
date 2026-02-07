@@ -489,8 +489,8 @@ bunx claude-flow@alpha init
 
 | Profile | Size | Use Case |
 |---------|------|----------|
-| `--omit=optional` | ~340MB | Core features only |
-| Default | ~340MB | Standard install |
+| `--omit=optional` | ~45MB | Core CLI only (fastest) |
+| Default | ~340MB | Full install with ML/embeddings |
 
 ```bash
 # Minimal install (skip ML/embeddings)
