@@ -100,6 +100,7 @@ const AGENTS_MAP: Record<string, string[]> = {
   sparc: ['sparc'],
   swarm: ['swarm'],
   browser: ['browser'],  // agent-browser integration
+  dualMode: ['dual-mode'],  // Claude Code + Codex hybrid execution
   // V3-specific agents
   v3: ['v3'],
   optimization: ['optimization'],
