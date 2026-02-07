@@ -77,6 +77,7 @@ const storeCommand: Command = {
     const ttl = ctx.flags.ttl as number;
     const tags = ctx.flags.tags ? (ctx.flags.tags as string).split(',') : [];
     const asVector = ctx.flags.vector as boolean;
+    const upsert = ctx.flags.upsert as boolean;
 
     if (!key) {
       output.printError('Key is required. Use --key or -k');
