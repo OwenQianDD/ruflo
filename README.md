@@ -855,6 +855,8 @@ Complex projects fail when implementation drifts from the original plan. RuvFlow
 - **ADR-008**: Vitest testing framework (10x faster than Jest)
 - **ADR-009**: Hybrid Memory Backend (SQLite + HNSW)
 - **ADR-026**: Intelligent 3-tier model routing
+- **ADR-048**: Auto Memory Bridge (Claude Code ↔ AgentDB bidirectional sync)
+- **ADR-049**: Self-Learning Memory with GNN (LearningBridge, MemoryGraph, AgentMemoryScope)
 
 </details>
 
