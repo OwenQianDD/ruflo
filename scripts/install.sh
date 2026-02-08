@@ -363,9 +363,9 @@ run_init() {
     echo ""
 
     if [ "$GLOBAL" = "1" ]; then
-        claude-flow init --yes 2>&1 || true
+        ruvflow init --yes 2>&1 || true
     else
-        npx claude-flow@${VERSION} init --yes 2>&1 || true
+        npx ruvflow@${VERSION} init --yes 2>&1 || true
     fi
     echo ""
 }
