@@ -10,8 +10,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const mod = await import('../.claude/helpers/context-persistence-hook.mjs');
 const {
   SQLiteBackend,
+  RuVectorBackend,
   JsonFileBackend,
   resolveBackend,
+  getRuVectorConfig,
   createHashEmbedding,
   hashContent,
   parseTranscript,
