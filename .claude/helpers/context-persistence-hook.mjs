@@ -275,6 +275,7 @@ class SQLiteBackend {
 
   /**
    * Cosine similarity search across all entries with embeddings.
+   * Handles both 384-dim (ONNX) and 768-dim (legacy hash) embeddings.
    * Returns top-k entries ranked by similarity to the query embedding.
    */
   semanticSearch(queryEmbedding, k = 10, namespace) {
@@ -282,12 +283,15 @@ class SQLiteBackend {
       'SELECT id, embedding, summary, session_id, chunk_index, confidence, access_count FROM transcript_entries WHERE namespace = ? AND embedding IS NOT NULL'
     ).all(namespace || NAMESPACE);
 
+    const queryDim = queryEmbedding.length;
     const scored = [];
     for (const row of rows) {
       if (!row.embedding) continue;
       const stored = new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4);
+      // Only compare if dimensions match
+      if (stored.length !== queryDim) continue;
       let dot = 0;
-      for (let i = 0; i < queryEmbedding.length && i < stored.length; i++) {
+      for (let i = 0; i < queryDim; i++) {
         dot += queryEmbedding[i] * stored[i];
       }
       // Boost by confidence (self-learning signal)
