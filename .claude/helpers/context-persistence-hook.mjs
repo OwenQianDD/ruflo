@@ -44,6 +44,8 @@ const RESTORE_BUDGET = parseInt(process.env.CLAUDE_FLOW_COMPACT_RESTORE_BUDGET |
 const MAX_MESSAGES = 500;
 const BLOCK_COMPACTION = process.env.CLAUDE_FLOW_BLOCK_COMPACTION === 'true';
 const COMPACT_INSTRUCTION_BUDGET = parseInt(process.env.CLAUDE_FLOW_COMPACT_INSTRUCTION_BUDGET || '2000', 10);
+const RETENTION_DAYS = parseInt(process.env.CLAUDE_FLOW_RETENTION_DAYS || '30', 10);
+const AUTO_OPTIMIZE = process.env.CLAUDE_FLOW_AUTO_OPTIMIZE !== 'false'; // on by default
 
 // Ensure data dir
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
