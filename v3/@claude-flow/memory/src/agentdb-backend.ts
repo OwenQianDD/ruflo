@@ -43,7 +43,7 @@ function ensureAgentDBImport(): Promise<void> {
   if (!agentdbImportPromise) {
     agentdbImportPromise = (async () => {
       try {
-        const agentdbModule = await import('agentdb');
+        const agentdbModule: any = await import('agentdb');
         AgentDB = agentdbModule.AgentDB || agentdbModule.default;
         HNSWIndex = agentdbModule.HNSWIndex;
         isHnswlibAvailable = agentdbModule.isHnswlibAvailable;
@@ -187,7 +187,22 @@ export class AgentDBBackend extends EventEmitter implements IMemoryBackend {
         vectorDimension: this.config.vectorDimension,
       });
 
-      await this.agentdb.initialize();
+      // Suppress agentdb's noisy console.log during init
+      // (EmbeddingService, AgentDB core emit info-level logs we don't need)
+      const origLog = console.log;
+      console.log = (...args: unknown[]) => {
+        const msg = String(args[0] ?? '');
+        if (msg.includes('Transformers.js loaded') ||
+            msg.includes('Using better-sqlite3') ||
+            msg.includes('better-sqlite3 unavailable') ||
+            msg.includes('[AgentDB]')) return;
+        origLog.apply(console, args);
+      };
+      try {
+        await this.agentdb.initialize();
+      } finally {
+        console.log = origLog;
+      }
 
       // Create memory_entries table if it doesn't exist
       await this.createSchema();
