@@ -3030,6 +3030,136 @@ sqlite3 .claude-flow/data/transcript-archive.db \
 
 ---
 
+## 💾 Storage: RVF (RuVector Format)
+
+Ruflo uses RVF — a compact binary storage format that replaces the 18MB sql.js WASM dependency with pure TypeScript. No native compilation, no WASM downloads, works everywhere Node.js runs.
+
+<details>
+<summary>💾 <strong>RVF Storage</strong> — Binary format, vector search, migration, and auto-selection</summary>
+
+### Why RVF?
+
+Previous versions shipped sql.js (18MB WASM blob) for persistent storage. This caused slow cold starts, large installs, and compatibility issues on ARM/Alpine. RVF eliminates all of that:
+
+| | Before (sql.js) | After (RVF) |
+|---|---|---|
+| **Install size** | +18MB WASM | 0 extra deps |
+| **Cold start** | ~2s (WASM compile) | <50ms |
+| **Platform support** | x86/ARM issues | Runs everywhere |
+| **Native deps** | Optional hnswlib-node | Pure TypeScript fallback |
+
+### How it works
+
+RVF files use a simple binary layout: a 4-byte magic header (`RVF\0`), a JSON metadata section, then packed entries. Each module has its own format variant:
+
+| Format | Magic Bytes | Used By | Purpose |
+|--------|-------------|---------|---------|
+| `RVF\0` | `0x52564600` | Memory backend | Entries + HNSW index |
+| `RVEC` | `0x52564543` | Embedding cache | Cached vectors with LRU eviction |
+| `RVFL` | `0x5256464C` | Event log | Append-only domain events |
+| `RVLS` | — | Learning store | SONA patterns + trajectories |
+
+### Storage auto-selection
+
+You don't need to pick a backend. The `DatabaseProvider` tries each option in order and uses the first one available:
+
+```
+RVF (pure TypeScript) → better-sqlite3 (native) → sql.js (WASM) → JSON (fallback)
+```
+
+RVF is always available since it has zero dependencies, so it wins by default. If you have `better-sqlite3` installed (e.g., for advanced queries), it gets priority.
+
+### Vector search with HnswLite
+
+RVF includes `HnswLite` — a pure TypeScript implementation of the HNSW (Hierarchical Navigable Small World) algorithm for fast nearest-neighbor search. It's used automatically when storing entries with embeddings.
+
+```typescript
+import { RvfBackend } from '@claude-flow/memory';
+
+const backend = new RvfBackend({ databasePath: './memory.rvf' });
+await backend.initialize();
+
+// Store entries — embeddings are indexed automatically
+await backend.store({ id: '1', key: 'auth-pattern', content: '...', embedding: vector });
+
+// Search by similarity
+const results = await backend.search({ embedding: queryVector, limit: 10 });
+```
+
+Supports cosine, dot product, and Euclidean distance metrics. For large datasets (100K+ entries), install `hnswlib-node` for the native implementation — the backend switches automatically.
+
+### Migrating from older formats
+
+The `RvfMigrator` converts between JSON files, SQLite databases, and RVF:
+
+```typescript
+import { RvfMigrator } from '@claude-flow/memory';
+
+// Auto-detect format and migrate
+await RvfMigrator.autoMigrate('./old-memory.db', './memory.rvf');
+
+// Or be explicit
+await RvfMigrator.fromJsonFile('./backup.json', './memory.rvf');
+await RvfMigrator.fromSqlite('./legacy.db', './memory.rvf');
+
+// Export back to JSON for inspection
+await RvfMigrator.toJsonFile('./memory.rvf', './export.json');
+```
+
+Format detection works by reading the first few bytes of the file — no file extension guessing.
+
+### Crash safety
+
+All write operations use atomic writes: data goes to a temporary file first, then a single `rename()` call swaps it into place. If the process crashes mid-write, the old file stays intact.
+
+- **Memory backend**: `file.rvf.tmp` → `file.rvf`
+- **Embedding cache**: `file.rvec.tmp.{random}` → `file.rvec`
+- **Event log**: Append-only (no overwrite needed)
+
+### SONA learning persistence
+
+The `PersistentSonaCoordinator` stores learning patterns and trajectories in RVF format, so agents retain knowledge across sessions:
+
+```typescript
+import { PersistentSonaCoordinator } from '@claude-flow/memory';
+
+const sona = new PersistentSonaCoordinator({
+  storePath: './data/sona-learning.rvls',
+});
+await sona.initialize();
+
+// Patterns survive restarts
+const similar = sona.findSimilarPatterns(embedding, 5);
+sona.storePattern('routing', embedding);
+await sona.shutdown(); // persists to disk
+```
+
+### Security
+
+RVF validates inputs at every boundary:
+
+- **Path validation** — null bytes and traversal attempts are rejected
+- **Header validation** — corrupted files are detected before parsing
+- **Payload limits** — event log entries cap at 100MB to prevent memory exhaustion
+- **Dimension validation** — embedding dimensions must be between 1 and 10,000
+- **Concurrent write protection** — a lock flag prevents overlapping disk flushes
+
+### Configuration
+
+```bash
+# Environment variables
+CLAUDE_FLOW_MEMORY_BACKEND=hybrid   # auto-selects RVF
+CLAUDE_FLOW_MEMORY_PATH=./data/memory
+
+# Or via CLI
+ruflo memory init --force
+ruflo config set memory.backend hybrid
+```
+
+</details>
+
+---
+
 ## 🧠 Intelligence & Learning
 
 Self-learning hooks, pattern recognition, and intelligent task routing.
@@ -5973,7 +6103,7 @@ Domain-Driven Design with bounded contexts, clean architecture, and measured per
 | Module | Purpose | Key Features |
 |--------|---------|--------------|
 | `@claude-flow/hooks` | Event-driven lifecycle | ReasoningBank, 27 hooks, pattern learning |
-| `@claude-flow/memory` | Unified vector storage | AgentDB, HNSW indexing, 150x faster search, LearningBridge, MemoryGraph, AgentMemoryScope |
+| `@claude-flow/memory` | Unified vector storage | AgentDB, RVF binary format, HnswLite, RvfMigrator, SONA persistence, LearningBridge, MemoryGraph |
 | `@claude-flow/security` | CVE remediation | Input validation, path security, AIDefence |
 | `@claude-flow/swarm` | Multi-agent coordination | 6 topologies, Byzantine consensus, auto-scaling |
 | `@claude-flow/plugins` | WASM extensions | RuVector plugins, semantic search, intent routing |
@@ -5981,7 +6111,7 @@ Domain-Driven Design with bounded contexts, clean architecture, and measured per
 | `@claude-flow/neural` | Self-learning | SONA, 9 RL algorithms, EWC++ memory preservation |
 | `@claude-flow/testing` | Quality assurance | London School TDD, Vitest, fixtures, mocks |
 | `@claude-flow/deployment` | Release automation | Versioning, changelogs, NPM publishing |
-| `@claude-flow/shared` | Common utilities | Types, validation schemas, constants |
+| `@claude-flow/shared` | Common utilities | Types, validation schemas, RvfEventLog, constants |
 | `@claude-flow/browser` | Browser automation | 59 MCP tools, element refs, trajectory learning |
 
 ### Architecture Principles
