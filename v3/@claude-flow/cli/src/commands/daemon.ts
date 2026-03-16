@@ -42,22 +42,26 @@ const startCommand: Command = {
     const rawMaxCpu = ctx.flags['max-cpu-load'] as string | undefined;
     const rawMinMem = ctx.flags['min-free-memory'] as string | undefined;
 
+    // Strict numeric pattern to prevent command injection when forwarding to subprocess (S1)
+    const NUMERIC_RE = /^\d+(\.\d+)?$/;
+    const sanitize = (s: string) => s.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
+
     if (rawMaxCpu || rawMinMem) {
       const thresholds: { maxCpuLoad?: number; minFreeMemoryPercent?: number } = {};
       if (rawMaxCpu) {
         const val = parseFloat(rawMaxCpu);
-        if (!isNaN(val) && val > 0) {
+        if (NUMERIC_RE.test(rawMaxCpu) && isFinite(val) && val > 0 && val <= 1000) {
           thresholds.maxCpuLoad = val;
         } else if (!quiet) {
-          output.printWarning(`Ignoring invalid --max-cpu-load value: ${rawMaxCpu}`);
+          output.printWarning(`Ignoring invalid --max-cpu-load value: ${sanitize(rawMaxCpu)}`);
         }
       }
       if (rawMinMem) {
         const val = parseFloat(rawMinMem);
-        if (!isNaN(val) && val >= 0 && val <= 100) {
+        if (NUMERIC_RE.test(rawMinMem) && isFinite(val) && val >= 0 && val <= 100) {
           thresholds.minFreeMemoryPercent = val;
         } else if (!quiet) {
-          output.printWarning(`Ignoring invalid --min-free-memory value: ${rawMinMem}`);
+          output.printWarning(`Ignoring invalid --min-free-memory value: ${sanitize(rawMinMem)}`);
         }
       }
       if (thresholds.maxCpuLoad !== undefined || thresholds.minFreeMemoryPercent !== undefined) {
@@ -268,10 +272,12 @@ async function startBackgroundDaemon(projectRoot: string, quiet: boolean, maxCpu
     'daemon', 'start', '--foreground', '--quiet',
   ];
   // Forward resource threshold flags to the foreground child process
-  if (maxCpuLoad) {
+  // Validate with strict numeric pattern to prevent shell injection on Windows (S1)
+  const SPAWN_NUMERIC_RE = /^\d+(\.\d+)?$/;
+  if (maxCpuLoad && SPAWN_NUMERIC_RE.test(maxCpuLoad)) {
     spawnArgs.push('--max-cpu-load', maxCpuLoad);
   }
-  if (minFreeMemory) {
+  if (minFreeMemory && SPAWN_NUMERIC_RE.test(minFreeMemory)) {
     spawnArgs.push('--min-free-memory', minFreeMemory);
   }
   const child = spawn(process.execPath, spawnArgs, spawnOpts);
