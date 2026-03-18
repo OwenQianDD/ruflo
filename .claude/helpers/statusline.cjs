@@ -238,8 +238,12 @@ function getV3Progress() {
 function getSecurityStatus() {
   const auditData = readJSON(path.join(CWD, '.claude-flow', 'security', 'audit-status.json'));
   if (auditData) {
-    // Check freshness — flag if audit is older than 7 days
-    const auditAge = auditData.lastAudit ? Date.now() - new Date(auditData.lastAudit).getTime() : Infinity;
+    const auditDate = auditData.lastAudit || auditData.lastScan;
+    if (!auditDate) {
+      // No audit has ever run — show as pending, not stale
+      return { status: 'PENDING', cvesFixed: 0, totalCves: 0 };
+    }
+    const auditAge = Date.now() - new Date(auditDate).getTime();
     const isStale = auditAge > 7 * 24 * 60 * 60 * 1000;
     return {
       status: isStale ? 'STALE' : (auditData.status || 'PENDING'),
