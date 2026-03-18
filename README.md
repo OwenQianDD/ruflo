@@ -161,6 +161,17 @@ curl -fsSL https://cdn.jsdelivr.net/gh/ruvnet/claude-flow@main/scripts/install.s
 npx ruflo@latest init --wizard
 ```
 
+### PR Review System
+
+The repository includes a local PR review workflow driven by [`scripts/review-pr.sh`](scripts/review-pr.sh) and the local development CLI.
+
+```bash
+alias ruflo-dev="node ~/Projects/ruflo/v3/@claude-flow/cli/bin/cli.js"
+./scripts/review-pr.sh https://github.com/OwenQianDD/ruflo/pull/1
+```
+
+Full usage is documented in [docs/review-system/README.md](docs/review-system/README.md).
+
 ---
 ### Key Capabilities
 
