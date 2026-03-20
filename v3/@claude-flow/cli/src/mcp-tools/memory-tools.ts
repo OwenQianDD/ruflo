@@ -402,6 +402,7 @@ export const memoryTools: MCPTool[] = [
           key,
           namespace,
           deleted: result.deleted,
+          hnswIndexInvalidated: result.deleted,
           backend: 'sql.js + HNSW',
         };
       } catch (error) {

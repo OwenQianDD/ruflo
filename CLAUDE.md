@@ -1,7 +1,7 @@
 # Claude Code Configuration - Ruflo v3.5
 
 > **Ruflo v3.5** (2026-02-27) — First major stable release. Formerly "Claude Flow".
-> 5,800+ commits, 55 alpha iterations, 215 MCP tools, 60+ agents, 8 AgentDB controllers.
+> 5,900+ commits, 55 alpha iterations, 259 MCP tools, 60+ agents, 8 AgentDB controllers.
 > Packages: `@claude-flow/cli@3.5.0`, `claude-flow@3.5.0`, `ruflo@3.5.0`
 
 ## Behavioral Rules (Always Enforced)

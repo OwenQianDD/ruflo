@@ -31,6 +31,9 @@ interface HiveState {
   updatedAt: string;
 }
 
+type ConsensusStrategy = 'bft' | 'raft' | 'quorum';
+type QuorumPreset = 'unanimous' | 'majority' | 'supermajority';
+
 interface ConsensusProposal {
   proposalId: string;
   type: string;
@@ -39,6 +42,11 @@ interface ConsensusProposal {
   proposedAt: string;
   votes: Record<string, boolean>;
   status: 'pending' | 'approved' | 'rejected';
+  strategy: ConsensusStrategy;
+  term?: number;              // Raft: term number
+  quorumPreset?: QuorumPreset; // Quorum: threshold preset
+  byzantineVoters?: string[]; // BFT: detected Byzantine voters
+  timeoutAt?: string;         // Raft: timeout for re-proposal
 }
 
 interface ConsensusResult {
@@ -47,6 +55,99 @@ interface ConsensusResult {
   result: 'approved' | 'rejected';
   votes: { for: number; against: number };
   decidedAt: string;
+  strategy: ConsensusStrategy;
+  term?: number;
+  byzantineDetected?: string[];
+}
+
+/**
+ * Calculate required votes for a given strategy and total node count.
+ */
+function calculateRequiredVotes(
+  strategy: ConsensusStrategy,
+  totalNodes: number,
+  quorumPreset: QuorumPreset = 'majority',
+): number {
+  if (totalNodes <= 0) return 1;
+  switch (strategy) {
+    case 'bft':
+      // BFT: requires 2/3 + 1 of total nodes
+      return Math.floor((totalNodes * 2) / 3) + 1;
+    case 'raft':
+      // Raft: simple majority
+      return Math.floor(totalNodes / 2) + 1;
+    case 'quorum':
+      switch (quorumPreset) {
+        case 'unanimous':
+          return totalNodes;
+        case 'supermajority':
+          return Math.floor((totalNodes * 2) / 3) + 1;
+        case 'majority':
+        default:
+          return Math.floor(totalNodes / 2) + 1;
+      }
+    default:
+      return Math.floor(totalNodes / 2) + 1;
+  }
+}
+
+/**
+ * Detect Byzantine behavior: a voter who has cast conflicting votes
+ * across proposals in the same round (same type, overlapping time).
+ * Here we check if the voter already voted differently on this proposal
+ * (which shouldn't happen if we block double-votes, so this checks
+ * cross-proposal conflicting votes for same type within the pending set).
+ */
+function detectByzantineVoters(
+  pending: ConsensusProposal[],
+  currentProposal: ConsensusProposal,
+  voterId: string,
+  newVote: boolean,
+): boolean {
+  // Check if voter cast opposite votes on proposals of the same type
+  for (const p of pending) {
+    if (p.proposalId === currentProposal.proposalId) continue;
+    if (p.type !== currentProposal.type) continue;
+    if (voterId in p.votes && p.votes[voterId] !== newVote) {
+      return true; // Conflicting vote detected
+    }
+  }
+  return false;
+}
+
+/**
+ * Try to resolve a proposal based on its strategy.
+ * Returns 'approved', 'rejected', or null if still pending.
+ */
+function tryResolveProposal(
+  proposal: ConsensusProposal,
+  totalNodes: number,
+): 'approved' | 'rejected' | null {
+  const votesFor = Object.values(proposal.votes).filter(v => v).length;
+  const votesAgainst = Object.values(proposal.votes).filter(v => !v).length;
+  const required = calculateRequiredVotes(
+    proposal.strategy,
+    totalNodes,
+    proposal.quorumPreset,
+  );
+
+  if (votesFor >= required) return 'approved';
+  if (votesAgainst >= required) return 'rejected';
+
+  // For quorum with 'unanimous', also reject if any vote is against
+  if (proposal.strategy === 'quorum' && proposal.quorumPreset === 'unanimous' && votesAgainst > 0) {
+    return 'rejected';
+  }
+
+  // Check if it's impossible to reach quorum (remaining potential votes can't tip it)
+  const totalVotes = Object.keys(proposal.votes).length;
+  const remaining = totalNodes - totalVotes;
+  if (votesFor + remaining < required && votesAgainst + remaining < required) {
+    // Deadlock: neither side can win -- reject
+    return 'rejected';
+  }
+
+  return null;
 }
 
 function getHiveDir(): string {
@@ -366,7 +467,7 @@ export const hiveMindTools: MCPTool[] = [
   },
   {
     name: 'hive-mind_consensus',
-    description: 'Propose or vote on consensus',
+    description: 'Propose or vote on consensus with BFT, Raft, or Quorum strategies',
     category: 'hive-mind',
     inputSchema: {
       type: 'object',
@@ -377,15 +478,42 @@ export const hiveMindTools: MCPTool[] = [
         value: { description: 'Proposal value (for propose)' },
         vote: { type: 'boolean', description: 'Vote (true=for, false=against)' },
         voterId: { type: 'string', description: 'Voter agent ID' },
+        strategy: { type: 'string', enum: ['bft', 'raft', 'quorum'], description: 'Consensus strategy (default: raft)' },
+        quorumPreset: { type: 'string', enum: ['unanimous', 'majority', 'supermajority'], description: 'Quorum threshold preset (for quorum strategy, default: majority)' },
+        term: { type: 'number', description: 'Term number (for raft strategy)' },
+        timeoutMs: { type: 'number', description: 'Timeout in ms for raft re-proposal (default: 30000)' },
       },
       required: ['action'],
     },
     handler: async (input) => {
       const state = loadHiveState();
       const action = input.action as string;
+      const strategy = (input.strategy as ConsensusStrategy) || 'raft';
+      const totalNodes = state.workers.length || 1;
 
       if (action === 'propose') {
         const proposalId = `proposal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const quorumPreset = (input.quorumPreset as QuorumPreset) || 'majority';
+        const term = (input.term as number) || (state.queen?.term ?? 1);
+        const timeoutMs = (input.timeoutMs as number) || 30000;
+
+        // Raft: check if there's already a pending proposal for this term
+        if (strategy === 'raft') {
+          const existingTermProposal = state.consensus.pending.find(
+            p => p.strategy === 'raft' && p.term === term && p.status === 'pending',
+          );
+          if (existingTermProposal) {
+            return {
+              action,
+              error: `Raft term ${term} already has a pending proposal: ${existingTermProposal.proposalId}. Wait for resolution or use a higher term.`,
+              existingProposalId: existingTermProposal.proposalId,
+              term,
+            };
+          }
+        }
+
+        const required = calculateRequiredVotes(strategy, totalNodes, quorumPreset);
+
         const proposal: ConsensusProposal = {
           proposalId,
           type: (input.type as string) || 'general',
@@ -394,6 +522,11 @@ export const hiveMindTools: MCPTool[] = [
           proposedAt: new Date().toISOString(),
           votes: {},
           status: 'pending',
+          strategy,
+          term: strategy === 'raft' ? term : undefined,
+          quorumPreset: strategy === 'quorum' ? quorumPreset : undefined,
+          byzantineVoters: strategy === 'bft' ? [] : undefined,
+          timeoutAt: strategy === 'raft' ? new Date(Date.now() + timeoutMs).toISOString() : undefined,
         };
 
         state.consensus.pending.push(proposal);
@@ -403,45 +536,136 @@ export const hiveMindTools: MCPTool[] = [
           action,
           proposalId,
           type: proposal.type,
+          strategy,
           status: 'pending',
-          requiredVotes: Math.ceil(state.workers.length / 2) + 1,
+          required,
+          totalNodes,
+          term: proposal.term,
+          quorumPreset: proposal.quorumPreset,
+          timeoutAt: proposal.timeoutAt,
         };
       }
 
       if (action === 'vote') {
         const proposal = state.consensus.pending.find(p => p.proposalId === input.proposalId);
         if (!proposal) {
-          return { action, error: 'Proposal not found' };
+          return { action, error: 'Proposal not found or already resolved' };
         }
 
         const voterId = input.voterId as string;
-        proposal.votes[voterId] = input.vote as boolean;
+        if (!voterId) {
+          return { action, error: 'voterId is required for voting' };
+        }
 
-        // Check if we have majority
+        const voteValue = input.vote as boolean;
+        const proposalStrategy = proposal.strategy || 'raft';
+        const required = calculateRequiredVotes(
+          proposalStrategy,
+          totalNodes,
+          proposal.quorumPreset,
+        );
+
+        // Prevent double-voting
+        if (voterId in proposal.votes) {
+          const previousVote = proposal.votes[voterId];
+          if (previousVote === voteValue) {
+            return {
+              action,
+              error: `Voter ${voterId} has already cast the same vote on this proposal`,
+              proposalId: proposal.proposalId,
+              existingVote: previousVote,
+            };
+          }
+          // Conflicting vote from same voter
+          if (proposalStrategy === 'bft') {
+            // BFT: detect as Byzantine behavior
+            if (!proposal.byzantineVoters) proposal.byzantineVoters = [];
+            if (!proposal.byzantineVoters.includes(voterId)) {
+              proposal.byzantineVoters.push(voterId);
+            }
+            // Remove their vote entirely -- Byzantine voter is excluded
+            delete proposal.votes[voterId];
+            saveHiveState(state);
+
+            return {
+              action,
+              proposalId: proposal.proposalId,
+              voterId,
+              byzantineDetected: true,
+              message: `Byzantine behavior detected: voter ${voterId} attempted conflicting vote. Vote invalidated.`,
+              byzantineVoters: proposal.byzantineVoters,
+              status: proposal.status,
+            };
+          }
+          if (proposalStrategy === 'raft') {
+            // Raft: only one vote per node per term, reject the change
+            return {
+              action,
+              error: `Raft: voter ${voterId} already voted in term ${proposal.term}. Cannot change vote.`,
+              proposalId: proposal.proposalId,
+              term: proposal.term,
+            };
+          }
+          // Quorum: reject double-vote
+          return {
+            action,
+            error: `Voter ${voterId} has already voted on this proposal`,
+            proposalId: proposal.proposalId,
+          };
+        }
+
+        // BFT: check for cross-proposal Byzantine behavior
+        if (proposalStrategy === 'bft') {
+          const isByzantine = detectByzantineVoters(
+            state.consensus.pending,
+            proposal,
+            voterId,
+            voteValue,
+          );
+          if (isByzantine) {
+            if (!proposal.byzantineVoters) proposal.byzantineVoters = [];
+            if (!proposal.byzantineVoters.includes(voterId)) {
+              proposal.byzantineVoters.push(voterId);
+            }
+            saveHiveState(state);
+            return {
+              action,
+              proposalId: proposal.proposalId,
+              voterId,
+              byzantineDetected: true,
+              message: `Byzantine behavior detected: voter ${voterId} cast conflicting votes across proposals of same type. Vote rejected.`,
+              byzantineVoters: proposal.byzantineVoters,
+              status: proposal.status,
+            };
+          }
+        }
+
+        // Record the vote
+        proposal.votes[voterId] = voteValue;
+
         const votesFor = Object.values(proposal.votes).filter(v => v).length;
         const votesAgainst = Object.values(proposal.votes).filter(v => !v).length;
-        const majority = Math.ceil(state.workers.length / 2) + 1;
 
-        if (votesFor >= majority) {
-          proposal.status = 'approved';
+        // Try to resolve
+        const resolution = tryResolveProposal(proposal, totalNodes);
+        let resolved = false;
+
+        if (resolution !== null) {
+          resolved = true;
+          proposal.status = resolution;
           state.consensus.history.push({
             proposalId: proposal.proposalId,
             type: proposal.type,
-            result: 'approved',
+            result: resolution,
             votes: { for: votesFor, against: votesAgainst },
             decidedAt: new Date().toISOString(),
+            strategy: proposalStrategy,
+            term: proposal.term,
+            byzantineDetected: proposal.byzantineVoters?.length ? proposal.byzantineVoters : undefined,
           });
-          state.consensus.pending = state.consensus.pending.filter(p => p.proposalId !== proposal.proposalId);
-        } else if (votesAgainst >= majority) {
-          proposal.status = 'rejected';
-          state.consensus.history.push({
-            proposalId: proposal.proposalId,
-            type: proposal.type,
-            result: 'rejected',
-            votes: { for: votesFor, against: votesAgainst },
-            decidedAt: new Date().toISOString(),
-          });
-          state.consensus.pending = state.consensus.pending.filter(p => p.proposalId !== proposal.proposalId);
+          state.consensus.pending = state.consensus.pending.filter(
+            p => p.proposalId !== proposal.proposalId,
+          );
         }
 
         saveHiveState(state);
@@ -450,10 +674,17 @@ export const hiveMindTools: MCPTool[] = [
           action,
           proposalId: proposal.proposalId,
           voterId,
-          vote: input.vote,
+          vote: voteValue,
+          strategy: proposalStrategy,
           votesFor,
           votesAgainst,
+          required,
+          totalNodes,
+          resolved,
+          result: resolved ? resolution : undefined,
           status: proposal.status,
+          term: proposal.term,
+          byzantineVoters: proposal.byzantineVoters?.length ? proposal.byzantineVoters : undefined,
         };
       }
 
@@ -463,23 +694,44 @@ export const hiveMindTools: MCPTool[] = [
           // Check history
           const historical = state.consensus.history.find(h => h.proposalId === input.proposalId);
           if (historical) {
-            return { action, ...historical, historical: true };
+            return { action, ...historical, historical: true, resolved: true };
           }
           return { action, error: 'Proposal not found' };
         }
 
         const votesFor = Object.values(proposal.votes).filter(v => v).length;
         const votesAgainst = Object.values(proposal.votes).filter(v => !v).length;
+        const proposalStrategy = proposal.strategy || 'raft';
+        const required = calculateRequiredVotes(
+          proposalStrategy,
+          totalNodes,
+          proposal.quorumPreset,
+        );
+
+        // Raft: check timeout
+        let timedOut = false;
+        if (proposalStrategy === 'raft' && proposal.timeoutAt) {
+          timedOut = new Date().getTime() > new Date(proposal.timeoutAt).getTime();
+        }
 
         return {
           action,
           proposalId: proposal.proposalId,
           type: proposal.type,
+          strategy: proposalStrategy,
           status: proposal.status,
           votesFor,
           votesAgainst,
           totalVotes: Object.keys(proposal.votes).length,
-          requiredMajority: Math.ceil(state.workers.length / 2) + 1,
+          required,
+          totalNodes,
+          resolved: false,
+          term: proposal.term,
+          quorumPreset: proposal.quorumPreset,
+          byzantineVoters: proposal.byzantineVoters?.length ? proposal.byzantineVoters : undefined,
+          timedOut,
+          timeoutAt: proposal.timeoutAt,
+          hint: timedOut ? `Raft timeout reached. Re-propose with term ${(proposal.term || 1) + 1}.` : undefined,
         };
       }
 
@@ -489,8 +741,16 @@ export const hiveMindTools: MCPTool[] = [
           pending: state.consensus.pending.map(p => ({
             proposalId: p.proposalId,
             type: p.type,
+            strategy: p.strategy || 'raft',
             proposedAt: p.proposedAt,
             totalVotes: Object.keys(p.votes).length,
+            required: calculateRequiredVotes(
+              p.strategy || 'raft',
+              totalNodes,
+              p.quorumPreset,
+            ),
+            term: p.term,
+            status: p.status,
           })),
           recentHistory: state.consensus.history.slice(-5),
         };

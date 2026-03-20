@@ -128,9 +128,22 @@ export class CommandParser {
       raw: [...args]
     };
 
-    // Build flag configuration from global options
-    const aliases = this.buildAliases();
-    const booleanFlags = this.getBooleanFlags();
+    // Pass 1: Identify command and subcommand (skip flags)
+    let resolvedCmd: Command | undefined;
+    let resolvedSub: Command | undefined;
+    for (const arg of args) {
+      if (arg.startsWith('-')) continue;
+      if (!resolvedCmd && this.commands.has(arg)) {
+        resolvedCmd = this.commands.get(arg);
+      } else if (resolvedCmd && !resolvedSub && resolvedCmd.subcommands) {
+        resolvedSub = resolvedCmd.subcommands.find(sc => sc.name === arg || sc.aliases?.includes(arg));
+      }
+    }
+
+    // Pass 2: Build aliases scoped to the resolved subcommand
+    // Subcommand-specific aliases take priority over global ones
+    const aliases = this.buildScopedAliases(resolvedSub || resolvedCmd);
+    const booleanFlags = this.getScopedBooleanFlags(resolvedSub || resolvedCmd);
 
     let i = 0;
     let parsingFlags = true;
@@ -321,6 +334,44 @@ export class CommandParser {
     }
 
     return { ...aliases, ...this.options.aliases };
+  }
+
+  /**
+   * Build aliases scoped to a specific command/subcommand.
+   * The resolved command's short flags take priority over global ones,
+   * fixing collisions where multiple subcommands use the same short flag (e.g. -t).
+   */
+  private buildScopedAliases(resolvedCmd?: Command): Record<string, string> {
+    // Start with global aliases as base
+    const aliases = this.buildAliases();
+
+    // Override with the resolved command's own options (these take priority)
+    if (resolvedCmd?.options) {
+      for (const opt of resolvedCmd.options) {
+        if (opt.short) {
+          aliases[opt.short] = opt.name;
+        }
+      }
+    }
+
+    return aliases;
+  }
+
+  /**
+   * Get boolean flags scoped to a specific command/subcommand.
+   */
+  private getScopedBooleanFlags(resolvedCmd?: Command): Set<string> {
+    const flags = this.getBooleanFlags();
+
+    if (resolvedCmd?.options) {
+      for (const opt of resolvedCmd.options) {
+        if (opt.type === 'boolean') {
+          flags.add(this.normalizeKey(opt.name));
+        }
+      }
+    }
+
+    return flags;
   }
 
   private getBooleanFlags(): Set<string> {

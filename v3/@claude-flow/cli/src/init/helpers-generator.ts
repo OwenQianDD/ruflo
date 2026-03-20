@@ -11,12 +11,12 @@ import { generateStatuslineScript, generateStatuslineHook } from './statusline-g
  */
 export function generatePreCommitHook(): string {
   return `#!/bin/bash
-# Claude Flow Pre-Commit Hook
+# Ruflo Pre-Commit Hook
 # Validates code quality before commit
 
 set -e
 
-echo "🔍 Running Claude Flow pre-commit checks..."
+echo "🔍 Running Ruflo pre-commit checks..."
 
 # Get staged files
 STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
@@ -44,7 +44,7 @@ echo "✅ Pre-commit checks complete"
  */
 export function generatePostCommitHook(): string {
   return `#!/bin/bash
-# Claude Flow Post-Commit Hook
+# Ruflo Post-Commit Hook
 # Records commit metrics and trains patterns
 
 COMMIT_HASH=$(git rev-parse HEAD)
@@ -52,8 +52,8 @@ COMMIT_MSG=$(git log -1 --pretty=%B)
 
 echo "📊 Recording commit metrics..."
 
-# Notify claude-flow of commit
-npx @claude-flow/cli hooks notify \\
+# Notify ruflo of commit
+npx ruflo@latest hooks notify \\
   --message "Commit: $COMMIT_MSG" \\
   --level info \\
   --metadata '{"hash": "'$COMMIT_HASH'"}' 2>/dev/null || true
@@ -68,7 +68,7 @@ echo "✅ Commit recorded"
 export function generateSessionManager(): string {
   return `#!/usr/bin/env node
 /**
- * Claude Flow Session Manager
+ * Ruflo Session Manager
  * Handles session lifecycle: start, restore, end
  */
 
@@ -202,7 +202,7 @@ module.exports = commands;
 export function generateAgentRouter(): string {
   return `#!/usr/bin/env node
 /**
- * Claude Flow Agent Router
+ * Ruflo Agent Router
  * Routes tasks to optimal agents based on learned patterns
  */
 
@@ -275,7 +275,7 @@ module.exports = { routeTask, AGENT_CAPABILITIES, TASK_PATTERNS };
 export function generateMemoryHelper(): string {
   return `#!/usr/bin/env node
 /**
- * Claude Flow Memory Helper
+ * Ruflo Memory Helper
  * Simple key-value memory for cross-session context
  */
 
@@ -369,7 +369,7 @@ export function generateHookHandler(): string {
   const lines = [
     '#!/usr/bin/env node',
     '/**',
-    ' * Claude Flow Hook Handler (Cross-Platform)',
+    ' * Ruflo Hook Handler (Cross-Platform)',
     ' * Dispatches hook events to the appropriate helper modules.',
     ' */',
     '',
@@ -672,7 +672,8 @@ export function generateIntelligenceStub(): string {
     '        var items = fs.readdirSync(candidates[i], { withFileTypes: true, recursive: true });',
     '        for (var j = 0; j < items.length; j++) {',
     '          if (items[j].name === "MEMORY.md") {',
-    '            var fp = items[j].path ? path.join(items[j].path, items[j].name) : path.join(candidates[i], items[j].name);',
+    '            var parentDir = items[j].parentPath || items[j].path || candidates[i];',
+    '            var fp = path.join(parentDir, items[j].name);',
     '            files.push(fp);',
     '          }',
     '        }',
@@ -704,15 +705,24 @@ export function generateIntelligenceStub(): string {
     '// Load entries from auto-memory-store or bootstrap from MEMORY.md',
     'function loadEntries() {',
     '  var store = readJSON(STORE_PATH);',
-    '  if (store && store.entries && store.entries.length > 0) {',
-    '    return store.entries.map(function(e, i) {',
+    '  // Support both formats: flat array or { entries: [...] }',
+    '  var entries = null;',
+    '  if (store) {',
+    '    if (Array.isArray(store) && store.length > 0) {',
+    '      entries = store;',
+    '    } else if (store.entries && store.entries.length > 0) {',
+    '      entries = store.entries;',
+    '    }',
+    '  }',
+    '  if (entries) {',
+    '    return entries.map(function(e, i) {',
     '      return {',
     '        id: e.id || ("entry-" + i),',
     '        content: e.content || e.value || "",',
     '        summary: e.summary || e.key || "",',
     '        category: e.category || e.namespace || "default",',
     '        confidence: e.confidence || 0.5,',
-    '        sourceFile: e.sourceFile || "",',
+    '        sourceFile: e.sourceFile || (e.metadata && e.metadata.sourceFile) || "",',
     '        words: tokenize((e.content || e.value || "") + " " + (e.summary || e.key || "")),',
     '      };',
     '    });',
@@ -1039,7 +1049,7 @@ PowerShell -ExecutionPolicy Bypass -File "%~dp0daemon-manager.ps1" %*
 export function generateCrossPlatformSessionManager(): string {
   return `#!/usr/bin/env node
 /**
- * Claude Flow Cross-Platform Session Manager
+ * Ruflo Cross-Platform Session Manager
  * Works on Windows, macOS, and Linux
  */
 

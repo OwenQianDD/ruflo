@@ -568,6 +568,9 @@ export {
   getReasoningBank,
   clearIntelligence,
   benchmarkAdaptation,
+  // RL loop API
+  endTrajectoryWithVerdict,
+  distillLearning,
   // Pattern persistence API
   getAllPatterns,
   getPatternsByType,

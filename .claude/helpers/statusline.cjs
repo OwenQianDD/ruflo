@@ -236,49 +236,68 @@ function getV3Progress() {
 
 // Security status (pure file reads)
 function getSecurityStatus() {
-  const totalCves = 3;
   const auditData = readJSON(path.join(CWD, '.claude-flow', 'security', 'audit-status.json'));
   if (auditData) {
+    const auditDate = auditData.lastAudit || auditData.lastScan;
+    if (!auditDate) {
+      // No audit has ever run — show as pending, not stale
+      return { status: 'PENDING', cvesFixed: 0, totalCves: 0 };
+    }
+    const auditAge = Date.now() - new Date(auditDate).getTime();
+    const isStale = auditAge > 7 * 24 * 60 * 60 * 1000;
     return {
-      status: auditData.status || 'PENDING',
+      status: isStale ? 'STALE' : (auditData.status || 'PENDING'),
       cvesFixed: auditData.cvesFixed || 0,
-      totalCves: auditData.totalCves || 3,
+      totalCves: auditData.totalCves || 0,
     };
   }
 
-  let cvesFixed = 0;
+  let scanCount = 0;
   try {
     const scanDir = path.join(CWD, '.claude', 'security-scans');
     if (fs.existsSync(scanDir)) {
-      cvesFixed = Math.min(totalCves, fs.readdirSync(scanDir).filter(f => f.endsWith('.json')).length);
+      scanCount = fs.readdirSync(scanDir).filter(f => f.endsWith('.json')).length;
     }
   } catch { /* ignore */ }
 
   return {
-    status: cvesFixed >= totalCves ? 'CLEAN' : cvesFixed > 0 ? 'IN_PROGRESS' : 'PENDING',
-    cvesFixed,
-    totalCves,
+    status: scanCount > 0 ? 'SCANNED' : 'NONE',
+    cvesFixed: 0,
+    totalCves: 0,
   };
 }
 
 // Swarm status (pure file reads, NO ps aux)
 function getSwarmStatus() {
-  const activityData = readJSON(path.join(CWD, '.claude-flow', 'metrics', 'swarm-activity.json'));
-  if (activityData?.swarm) {
-    return {
-      activeAgents: activityData.swarm.agent_count || 0,
-      maxAgents: CONFIG.maxAgents,
-      coordinationActive: activityData.swarm.coordination_active || activityData.swarm.active || false,
-    };
+  // Check swarm state file — only trust if recently updated (within 5 min)
+  const staleThresholdMs = 5 * 60 * 1000;
+  const now = Date.now();
+
+  const swarmStatePath = path.join(CWD, '.claude-flow', 'swarm', 'swarm-state.json');
+  const swarmState = readJSON(swarmStatePath);
+  if (swarmState) {
+    const updatedAt = swarmState.updatedAt || swarmState.startedAt;
+    const age = updatedAt ? now - new Date(updatedAt).getTime() : Infinity;
+    if (age < staleThresholdMs) {
+      return {
+        activeAgents: swarmState.agents?.length || swarmState.agentCount || 0,
+        maxAgents: swarmState.maxAgents || CONFIG.maxAgents,
+        coordinationActive: true,
+      };
+    }
   }
 
-  const progressData = readJSON(path.join(CWD, '.claude-flow', 'metrics', 'v3-progress.json'));
-  if (progressData?.swarm) {
-    return {
-      activeAgents: progressData.swarm.activeAgents || progressData.swarm.agent_count || 0,
-      maxAgents: progressData.swarm.totalAgents || CONFIG.maxAgents,
-      coordinationActive: progressData.swarm.active || (progressData.swarm.activeAgents > 0),
-    };
+  const activityData = readJSON(path.join(CWD, '.claude-flow', 'metrics', 'swarm-activity.json'));
+  if (activityData?.swarm) {
+    const updatedAt = activityData.timestamp || activityData.swarm.timestamp;
+    const age = updatedAt ? now - new Date(updatedAt).getTime() : Infinity;
+    if (age < staleThresholdMs) {
+      return {
+        activeAgents: activityData.swarm.agent_count || 0,
+        maxAgents: CONFIG.maxAgents,
+        coordinationActive: activityData.swarm.coordination_active || activityData.swarm.active || false,
+      };
+    }
   }
 
   return { activeAgents: 0, maxAgents: CONFIG.maxAgents, coordinationActive: false };
@@ -298,8 +317,9 @@ function getSystemMetrics() {
   if (learningData?.intelligence?.score !== undefined) {
     intelligencePct = Math.min(100, Math.floor(learningData.intelligence.score));
   } else {
-    const fromPatterns = learning.patterns > 0 ? Math.min(100, Math.floor(learning.patterns / 10)) : 0;
-    const fromVectors = agentdb.vectorCount > 0 ? Math.min(100, Math.floor(agentdb.vectorCount / 100)) : 0;
+    // Use actual vector/entry counts — 2000 entries = 100%
+    const fromPatterns = learning.patterns > 0 ? Math.min(100, Math.floor(learning.patterns / 20)) : 0;
+    const fromVectors = agentdb.vectorCount > 0 ? Math.min(100, Math.floor(agentdb.vectorCount / 20)) : 0;
     intelligencePct = Math.max(fromPatterns, fromVectors);
   }
 
@@ -334,15 +354,7 @@ function getSystemMetrics() {
 
 // ADR status (count files only — don't read contents)
 function getADRStatus() {
-  const complianceData = readJSON(path.join(CWD, '.claude-flow', 'metrics', 'adr-compliance.json'));
-  if (complianceData) {
-    const checks = complianceData.checks || {};
-    const total = Object.keys(checks).length;
-    const impl = Object.values(checks).filter(c => c.compliant).length;
-    return { count: total, implemented: impl, compliance: complianceData.compliance || 0 };
-  }
-
-  // Fallback: just count ADR files (don't read them)
+  // Count actual ADR files first — compliance JSON may be stale
   const adrPaths = [
     path.join(CWD, 'v3', 'implementation', 'adrs'),
     path.join(CWD, 'docs', 'adrs'),
@@ -355,10 +367,8 @@ function getADRStatus() {
         const files = fs.readdirSync(adrPath).filter(f =>
           f.endsWith('.md') && (f.startsWith('ADR-') || f.startsWith('adr-') || /^\d{4}-/.test(f))
         );
-        // Estimate: ~70% implemented in mature projects
-        const implemented = Math.floor(files.length * 0.7);
-        const compliance = files.length > 0 ? Math.floor((implemented / files.length) * 100) : 0;
-        return { count: files.length, implemented, compliance };
+        // Report actual count — don't guess compliance without reading files
+        return { count: files.length, implemented: files.length, compliance: 0 };
       }
     } catch { /* ignore */ }
   }
@@ -369,13 +379,20 @@ function getADRStatus() {
 // Hooks status (shared settings cache)
 function getHooksStatus() {
   let enabled = 0;
-  const total = 17;
+  let total = 0;
   const settings = getSettings();
 
   if (settings?.hooks) {
     for (const category of Object.keys(settings.hooks)) {
-      const h = settings.hooks[category];
-      if (Array.isArray(h) && h.length > 0) enabled++;
+      const matchers = settings.hooks[category];
+      if (!Array.isArray(matchers)) continue;
+      for (const matcher of matchers) {
+        const hooks = matcher?.hooks;
+        if (Array.isArray(hooks)) {
+          total += hooks.length;
+          enabled += hooks.length;
+        }
+      }
     }
   }
 
@@ -383,6 +400,7 @@ function getHooksStatus() {
     const hooksDir = path.join(CWD, '.claude', 'hooks');
     if (fs.existsSync(hooksDir)) {
       const hookFiles = fs.readdirSync(hooksDir).filter(f => f.endsWith('.js') || f.endsWith('.sh')).length;
+      total = Math.max(total, hookFiles);
       enabled = Math.max(enabled, hookFiles);
     }
   } catch { /* ignore */ }
@@ -390,52 +408,52 @@ function getHooksStatus() {
   return { enabled, total };
 }
 
-// AgentDB stats (pure stat calls)
+// AgentDB stats — count real entries, not file-size heuristics
 function getAgentDBStats() {
   let vectorCount = 0;
   let dbSizeKB = 0;
   let namespaces = 0;
   let hasHnsw = false;
 
-  const dbFiles = [
-    path.join(CWD, '.swarm', 'memory.db'),
-    path.join(CWD, '.claude-flow', 'memory.db'),
-    path.join(CWD, '.claude', 'memory.db'),
-    path.join(CWD, 'data', 'memory.db'),
-  ];
+  // 1. Count real entries from auto-memory-store.json
+  const storePath = path.join(CWD, '.claude-flow', 'data', 'auto-memory-store.json');
+  const storeStat = safeStat(storePath);
+  if (storeStat) {
+    dbSizeKB += storeStat.size / 1024;
+    try {
+      const store = JSON.parse(fs.readFileSync(storePath, 'utf-8'));
+      if (Array.isArray(store)) vectorCount += store.length;
+      else if (store?.entries) vectorCount += store.entries.length;
+    } catch { /* fall back to size estimate */ }
+  }
 
+  // 2. Count entries from ranked-context.json
+  const rankedPath = path.join(CWD, '.claude-flow', 'data', 'ranked-context.json');
+  try {
+    const ranked = readJSON(rankedPath);
+    if (ranked?.entries?.length > vectorCount) vectorCount = ranked.entries.length;
+  } catch { /* ignore */ }
+
+  // 3. Add DB file sizes
+  const dbFiles = [
+    path.join(CWD, 'data', 'memory.db'),
+    path.join(CWD, '.claude-flow', 'memory.db'),
+    path.join(CWD, '.swarm', 'memory.db'),
+  ];
   for (const f of dbFiles) {
     const stat = safeStat(f);
     if (stat) {
-      dbSizeKB = stat.size / 1024;
-      vectorCount = Math.floor(dbSizeKB / 2);
-      namespaces = 1;
-      break;
+      dbSizeKB += stat.size / 1024;
+      namespaces++;
     }
   }
 
-  if (vectorCount === 0) {
-    const dbDirs = [
-      path.join(CWD, '.claude-flow', 'agentdb'),
-      path.join(CWD, '.swarm', 'agentdb'),
-      path.join(CWD, '.agentdb'),
-    ];
-    for (const dir of dbDirs) {
-      try {
-        if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
-          const files = fs.readdirSync(dir);
-          namespaces = files.filter(f => f.endsWith('.db') || f.endsWith('.sqlite')).length;
-          for (const file of files) {
-            const stat = safeStat(path.join(dir, file));
-            if (stat?.isFile()) dbSizeKB += stat.size / 1024;
-          }
-          vectorCount = Math.floor(dbSizeKB / 2);
-          break;
-        }
-      } catch { /* ignore */ }
-    }
-  }
+  // 4. Check for graph data
+  const graphPath = path.join(CWD, 'data', 'memory.graph');
+  const graphStat = safeStat(graphPath);
+  if (graphStat) dbSizeKB += graphStat.size / 1024;
 
+  // 5. HNSW index
   const hnswPaths = [
     path.join(CWD, '.swarm', 'hnsw.index'),
     path.join(CWD, '.claude-flow', 'hnsw.index'),
@@ -444,8 +462,18 @@ function getAgentDBStats() {
     const stat = safeStat(p);
     if (stat) {
       hasHnsw = true;
-      vectorCount = Math.max(vectorCount, Math.floor(stat.size / 512));
       break;
+    }
+  }
+
+  // HNSW is available if memory package is present
+  if (!hasHnsw) {
+    const memPkgPaths = [
+      path.join(CWD, 'v3', '@claude-flow', 'memory', 'dist'),
+      path.join(CWD, 'node_modules', '@claude-flow', 'memory'),
+    ];
+    for (const p of memPkgPaths) {
+      if (fs.existsSync(p)) { hasHnsw = true; break; }
     }
   }
 
@@ -457,7 +485,7 @@ function getTestStats() {
   let testFiles = 0;
 
   function countTestFiles(dir, depth = 0) {
-    if (depth > 2) return; // Shallower recursion limit
+    if (depth > 6) return;
     try {
       if (!fs.existsSync(dir)) return;
       const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -474,10 +502,10 @@ function getTestStats() {
     } catch { /* ignore */ }
   }
 
-  for (const d of ['tests', 'test', '__tests__', 'v3/__tests__']) {
+  // Scan all source directories
+  for (const d of ['tests', 'test', '__tests__', 'src', 'v3']) {
     countTestFiles(path.join(CWD, d));
   }
-  countTestFiles(path.join(CWD, 'src'));
 
   // Estimate ~4 test cases per file (avoids reading every file)
   return { testFiles, testCases: testFiles * 4 };
@@ -658,8 +686,8 @@ function generateDashboard() {
   // Line 2: Swarm + Hooks + CVE + Memory + Intelligence
   const swarmInd = swarm.coordinationActive ? `${c.brightGreen}\u25C9${c.reset}` : `${c.dim}\u25CB${c.reset}`;
   const agentsColor = swarm.activeAgents > 0 ? c.brightGreen : c.red;
-  const secIcon = security.status === 'CLEAN' ? '\uD83D\uDFE2' : security.status === 'IN_PROGRESS' ? '\uD83D\uDFE1' : '\uD83D\uDD34';
-  const secColor = security.status === 'CLEAN' ? c.brightGreen : security.status === 'IN_PROGRESS' ? c.brightYellow : c.brightRed;
+  const secIcon = security.status === 'CLEAN' ? '\uD83D\uDFE2' : (security.status === 'IN_PROGRESS' || security.status === 'STALE') ? '\uD83D\uDFE1' : '\uD83D\uDD34';
+  const secColor = security.status === 'CLEAN' ? c.brightGreen : (security.status === 'IN_PROGRESS' || security.status === 'STALE') ? c.brightYellow : c.brightRed;
   const hooksColor = hooks.enabled > 0 ? c.brightGreen : c.dim;
   const intellColor = system.intelligencePct >= 80 ? c.brightGreen : system.intelligencePct >= 40 ? c.brightYellow : c.dim;
 

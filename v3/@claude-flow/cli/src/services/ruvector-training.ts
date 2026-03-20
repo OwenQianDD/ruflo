@@ -41,6 +41,15 @@ interface SonaEngineInstance {
   flush(): void;
 }
 
+
+/**
+ * ESM/CJS interop helper — handles `.default` for CJS modules.
+ * Uses `'default' in mod` check which is safer than `mod.default || mod`.
+ */
+async function importWithInterop<T = any>(packageName: string): Promise<T> {
+  const mod = await import(packageName);
+  return ('default' in mod) ? (mod as any).default : mod;
+}
 // Lazy-loaded WASM modules
 let microLoRA: WasmMicroLoRA | null = null;
 let scopedLoRA: WasmScopedLoRA | null = null;
@@ -64,6 +73,16 @@ let totalForwards = 0;
 let totalSonaLearns = 0;
 let totalSonaSearches = 0;
 let lastBenchmark: BenchmarkResult[] | null = null;
+
+// Backend tracking
+let activeBackend: 'wasm' | 'js-fallback' = 'js-fallback';
+
+/**
+ * Get which backend is active for training
+ */
+export function getActiveBackend(): 'wasm' | 'js-fallback' {
+  return activeBackend;
+}
 
 export interface TrainingConfig {
   dim?: number;           // Embedding dimension (max 256)
@@ -95,11 +114,195 @@ export interface TrainingResult {
 }
 
 /**
- * Initialize the RuVector training system
+ * Pure-JS fallback implementations for when WASM is unavailable.
+ * These provide the same API surface with basic linear algebra.
+ */
+class JsMicroLoRA implements Pick<WasmMicroLoRA, 'adapt_array' | 'adapt_count' | 'param_count' | 'forward_array' | 'forward_count' | 'adapt_with_reward' | 'delta_norm' | 'dim' | 'reset' | 'free'> {
+  private _dim: number;
+  private _alpha: number;
+  private _lr: number;
+  private _adaptCount = 0n;
+  private _forwardCount = 0n;
+  private _deltaNorm = 0;
+  private _A: Float32Array; // Low-rank A (rank x dim)
+  private _B: Float32Array; // Low-rank B (dim x rank)
+  private readonly RANK = 2;
+
+  constructor(dim: number, alpha: number, lr: number) {
+    this._dim = dim;
+    this._alpha = alpha;
+    this._lr = lr;
+    this._A = new Float32Array(this.RANK * dim);
+    this._B = new Float32Array(dim * this.RANK);
+    // Xavier initialization
+    const scale = Math.sqrt(2 / (dim + this.RANK));
+    for (let i = 0; i < this._A.length; i++) this._A[i] = (Math.random() - 0.5) * scale;
+    for (let i = 0; i < this._B.length; i++) this._B[i] = (Math.random() - 0.5) * scale;
+  }
+
+  adapt_array(gradient: Float32Array): void {
+    // Simple gradient update on low-rank matrices
+    let norm = 0;
+    for (let i = 0; i < Math.min(gradient.length, this._A.length); i++) {
+      const delta = -this._lr * gradient[i % gradient.length] * this._alpha;
+      this._A[i] += delta;
+      norm += delta * delta;
+    }
+    this._deltaNorm = Math.sqrt(norm);
+    this._adaptCount++;
+  }
+
+  adapt_count(): bigint { return this._adaptCount; }
+  param_count(): number { return this._A.length + this._B.length; }
+
+  forward_array(input: Float32Array): Float32Array {
+    const output = new Float32Array(this._dim);
+    // y = x + alpha * B @ A @ x  (simplified low-rank)
+    for (let i = 0; i < this._dim; i++) {
+      output[i] = input[i];
+      let sum = 0;
+      for (let r = 0; r < this.RANK; r++) {
+        let dot = 0;
+        for (let j = 0; j < this._dim; j++) {
+          dot += this._A[r * this._dim + j] * input[j];
+        }
+        sum += this._B[i * this.RANK + r] * dot;
+      }
+      output[i] += this._alpha * sum;
+    }
+    this._forwardCount++;
+    return output;
+  }
+
+  forward_count(): bigint { return this._forwardCount; }
+
+  adapt_with_reward(improvement: number): void {
+    const scale = improvement * this._lr * this._alpha;
+    let norm = 0;
+    for (let i = 0; i < this._A.length; i++) {
+      const delta = scale * (Math.random() - 0.5);
+      this._A[i] += delta;
+      norm += delta * delta;
+    }
+    this._deltaNorm = Math.sqrt(norm);
+    this._adaptCount++;
+  }
+
+  delta_norm(): number { return this._deltaNorm; }
+  dim(): number { return this._dim; }
+  reset(): void {
+    this._A.fill(0);
+    this._B.fill(0);
+    this._adaptCount = 0n;
+    this._forwardCount = 0n;
+    this._deltaNorm = 0;
+  }
+  free(): void { /* no-op for JS */ }
+}
+
+class JsScopedLoRA implements Pick<WasmScopedLoRA, 'adapt_array' | 'adapt_count' | 'forward_array' | 'forward_count' | 'adapt_with_reward' | 'delta_norm' | 'total_adapt_count' | 'total_forward_count' | 'set_category_fallback' | 'reset_all' | 'reset_scope' | 'free'> {
+  private adapters: Map<number, JsMicroLoRA> = new Map();
+  private _dim: number;
+  private _alpha: number;
+  private _lr: number;
+  private _fallback = false;
+
+  constructor(dim: number, alpha: number, lr: number) {
+    this._dim = dim;
+    this._alpha = alpha;
+    this._lr = lr;
+  }
+
+  private getAdapter(opType: number): JsMicroLoRA {
+    if (!this.adapters.has(opType)) {
+      if (this._fallback && opType > 0 && this.adapters.has(0)) {
+        return this.adapters.get(0)!;
+      }
+      this.adapters.set(opType, new JsMicroLoRA(this._dim, this._alpha, this._lr));
+    }
+    return this.adapters.get(opType)!;
+  }
+
+  adapt_array(opType: number, gradient: Float32Array): void { this.getAdapter(opType).adapt_array(gradient); }
+  adapt_count(opType: number): bigint { return this.getAdapter(opType).adapt_count(); }
+  forward_array(opType: number, input: Float32Array): Float32Array { return this.getAdapter(opType).forward_array(input); }
+  forward_count(opType: number): bigint { return this.getAdapter(opType).forward_count(); }
+  adapt_with_reward(opType: number, improvement: number): void { this.getAdapter(opType).adapt_with_reward(improvement); }
+  delta_norm(opType: number): number { return this.getAdapter(opType).delta_norm(); }
+  set_category_fallback(enabled: boolean): void { this._fallback = enabled; }
+
+  total_adapt_count(): bigint {
+    let total = 0n;
+    for (const a of this.adapters.values()) total += a.adapt_count();
+    return total;
+  }
+
+  total_forward_count(): bigint {
+    let total = 0n;
+    for (const a of this.adapters.values()) total += a.forward_count();
+    return total;
+  }
+
+  reset_all(): void { this.adapters.clear(); }
+  reset_scope(opType: number): void { this.adapters.delete(opType); }
+  free(): void { this.adapters.clear(); }
+}
+
+class JsTrajectoryBuffer implements Pick<WasmTrajectoryBuffer, 'record' | 'is_empty' | 'total_count' | 'success_rate' | 'mean_improvement' | 'best_improvement' | 'high_quality_count' | 'variance' | 'reset' | 'free'> {
+  private entries: { improvement: number }[] = [];
+  private capacity: number;
+
+  constructor(capacity: number, _dim: number) {
+    this.capacity = capacity;
+  }
+
+  record(_embedding: Float32Array, _opType: number, _attType: number, executionMs: number, baselineMs: number): void {
+    const improvement = baselineMs > 0 ? (baselineMs - executionMs) / baselineMs : 0;
+    if (this.entries.length >= this.capacity) this.entries.shift();
+    this.entries.push({ improvement });
+  }
+
+  is_empty(): boolean { return this.entries.length === 0; }
+  total_count(): bigint { return BigInt(this.entries.length); }
+
+  success_rate(): number {
+    if (this.entries.length === 0) return 0;
+    return this.entries.filter(e => e.improvement > 0).length / this.entries.length;
+  }
+
+  mean_improvement(): number {
+    if (this.entries.length === 0) return 0;
+    return this.entries.reduce((s, e) => s + e.improvement, 0) / this.entries.length;
+  }
+
+  best_improvement(): number {
+    if (this.entries.length === 0) return 0;
+    return Math.max(...this.entries.map(e => e.improvement));
+  }
+
+  high_quality_count(threshold: number): number {
+    return this.entries.filter(e => e.improvement > threshold).length;
+  }
+
+  variance(): number {
+    if (this.entries.length < 2) return 0;
+    const mean = this.mean_improvement();
+    return this.entries.reduce((s, e) => s + (e.improvement - mean) ** 2, 0) / (this.entries.length - 1);
+  }
+
+  reset(): void { this.entries = []; }
+  free(): void { this.entries = []; }
+}
+
+/**
+ * Initialize the RuVector training system.
+ * Attempts to load @ruvector/learning-wasm for WASM-accelerated training.
+ * Falls back to a pure-JS implementation if WASM is unavailable.
  */
 export async function initializeTraining(config: TrainingConfig = {}): Promise<{
   success: boolean;
   features: string[];
+  backend: 'wasm' | 'js-fallback';
   error?: string;
 }> {
   const features: string[] = [];
@@ -107,13 +310,13 @@ export async function initializeTraining(config: TrainingConfig = {}): Promise<{
   const lr = config.learningRate || 0.01;
   const alpha = config.alpha || 0.1;
 
+  // --- Attempt WASM backend first ---
+  let wasmLoaded = false;
   try {
-    // Initialize MicroLoRA with direct WASM loading (Node.js compatible)
     const fs = await import('fs');
     const { createRequire } = await import('module');
     const require = createRequire(import.meta.url);
 
-    // Load WASM file directly instead of using fetch
     const wasmPath = require.resolve('@ruvector/learning-wasm/ruvector_learning_wasm_bg.wasm');
     const wasmBuffer = fs.readFileSync(wasmPath);
 
@@ -121,22 +324,44 @@ export async function initializeTraining(config: TrainingConfig = {}): Promise<{
     learningWasm.initSync({ module: wasmBuffer });
 
     microLoRA = new learningWasm.WasmMicroLoRA(dim, alpha, lr);
-    features.push(`MicroLoRA (${dim}-dim, <1μs adaptation)`);
+    features.push(`MicroLoRA/WASM (${dim}-dim, <1μs adaptation)`);
 
-    // Initialize ScopedLoRA for per-operator learning
     scopedLoRA = new learningWasm.WasmScopedLoRA(dim, alpha, lr);
     scopedLoRA.set_category_fallback(true);
-    features.push('ScopedLoRA (17 operators)');
+    features.push('ScopedLoRA/WASM (17 operators)');
 
-    // Initialize trajectory buffer
     trajectoryBuffer = new learningWasm.WasmTrajectoryBuffer(
       config.trajectoryCapacity || 10000,
       dim
     );
-    features.push('TrajectoryBuffer');
+    features.push('TrajectoryBuffer/WASM');
 
-    // Initialize attention mechanisms
-    const attention: any = await import('@ruvector/attention');
+    activeBackend = 'wasm';
+    wasmLoaded = true;
+  } catch (wasmError) {
+    // WASM not available - fall back to JS implementation
+    const reason = wasmError instanceof Error ? wasmError.message : String(wasmError);
+    console.warn(`[ruvector] WASM backend unavailable (${reason}), using JS fallback`);
+
+    microLoRA = new JsMicroLoRA(dim, alpha, lr) as unknown as WasmMicroLoRA;
+    features.push(`MicroLoRA/JS (${dim}-dim, JS fallback)`);
+
+    scopedLoRA = new JsScopedLoRA(dim, alpha, lr) as unknown as WasmScopedLoRA;
+    (scopedLoRA as any).set_category_fallback(true);
+    features.push('ScopedLoRA/JS (17 operators)');
+
+    trajectoryBuffer = new JsTrajectoryBuffer(
+      config.trajectoryCapacity || 10000,
+      dim
+    ) as unknown as WasmTrajectoryBuffer;
+    features.push('TrajectoryBuffer/JS');
+
+    activeBackend = 'js-fallback';
+  }
+
+  // --- Attention mechanisms (optional, independent of WASM) ---
+  try {
+    const attention: any = await importWithInterop('@ruvector/attention');
 
     if (config.useFlashAttention !== false) {
       flashAttention = new attention.FlashAttention(dim, 64);
@@ -153,14 +378,12 @@ export async function initializeTraining(config: TrainingConfig = {}): Promise<{
       features.push('HyperbolicAttention');
     }
 
-    // Initialize optimizer and loss
     optimizer = new attention.AdamWOptimizer(lr, 0.9, 0.999, 1e-8, 0.01);
     features.push('AdamW Optimizer');
 
     contrastiveLoss = new attention.InfoNceLoss(0.07);
     features.push('InfoNCE Loss');
 
-    // Curriculum scheduler
     if (config.totalSteps) {
       curriculum = new attention.CurriculumScheduler(
         config.totalSteps,
@@ -169,43 +392,36 @@ export async function initializeTraining(config: TrainingConfig = {}): Promise<{
       features.push('Curriculum Learning');
     }
 
-    // Hard negative mining - use string for MiningStrategy enum due to NAPI binding quirk
     try {
       hardMiner = new attention.HardNegativeMiner(5, 'semi_hard');
       features.push('Hard Negative Mining');
     } catch {
       // Mining not available, continue without it
     }
+  } catch (attentionError) {
+    // @ruvector/attention not available - attention features skipped
+    const reason = attentionError instanceof Error ? attentionError.message : String(attentionError);
+    console.warn(`[ruvector] @ruvector/attention unavailable (${reason}), attention features disabled`);
+  }
 
-    // Initialize SONA (optional, backward compatible)
-    if (config.useSona !== false) {
-      try {
-        const sona = await import('@ruvector/sona');
-        const sonaRank = config.sonaRank || 4;
-        // SonaEngine constructor: (dim, rank, alpha, learningRate) - TypeScript types are wrong
-        // @ts-expect-error - SonaEngine accepts 4 positional args but types say 1
-        sonaEngine = new sona.SonaEngine(dim, sonaRank, alpha, lr) as SonaEngineInstance;
-        sonaAvailable = true;
-        features.push(`SONA (${dim}-dim, rank-${sonaRank}, 624k learn/s)`);
-      } catch (sonaError) {
-        // SONA not available, continue without it (backward compatible)
-        sonaAvailable = false;
-        // Only log if explicitly requested
-        if (config.useSona === true) {
-          console.warn('SONA requested but not available:', sonaError);
-        }
+  // --- SONA (optional, backward compatible) ---
+  if (config.useSona !== false) {
+    try {
+      const sona = await importWithInterop('@ruvector/sona');
+      const sonaRank = config.sonaRank || 4;
+      sonaEngine = new sona.SonaEngine(dim, sonaRank, alpha, lr) as SonaEngineInstance;
+      sonaAvailable = true;
+      features.push(`SONA (${dim}-dim, rank-${sonaRank}, 624k learn/s)`);
+    } catch (sonaError) {
+      sonaAvailable = false;
+      if (config.useSona === true) {
+        console.warn('SONA requested but not available:', sonaError);
       }
     }
-
-    initialized = true;
-    return { success: true, features };
-  } catch (error) {
-    return {
-      success: false,
-      features,
-      error: error instanceof Error ? error.message : String(error),
-    };
   }
+
+  initialized = true;
+  return { success: true, features, backend: activeBackend };
 }
 
 /**
@@ -459,7 +675,7 @@ export async function benchmarkTraining(
   dim?: number,
   iterations?: number
 ): Promise<BenchmarkResult[]> {
-  const attention: any = await import('@ruvector/attention');
+  const attention: any = await importWithInterop('@ruvector/attention');
   lastBenchmark = attention.benchmarkAttention(dim || 256, 100, iterations || 1000);
   return lastBenchmark ?? [];
 }
@@ -589,6 +805,7 @@ export function sonaFlush(): void {
  */
 export function getTrainingStats(): {
   initialized: boolean;
+  backend: 'wasm' | 'js-fallback';
   totalAdaptations: number;
   totalForwards: number;
   microLoraStats?: {
@@ -607,6 +824,7 @@ export function getTrainingStats(): {
 } {
   const stats: ReturnType<typeof getTrainingStats> = {
     initialized,
+    backend: activeBackend,
     totalAdaptations,
     totalForwards,
   };
@@ -660,6 +878,7 @@ export function resetTraining(): void {
   totalForwards = 0;
   totalSonaLearns = 0;
   totalSonaSearches = 0;
+  activeBackend = 'js-fallback';
 }
 
 /**

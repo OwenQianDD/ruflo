@@ -58,7 +58,7 @@ export {
 } from './worker-queue.js';
 
 // Re-export types
-export type { default as WorkerDaemonType } from './worker-daemon.js';
+export type { default as WorkerDaemonType, DaemonConfig } from './worker-daemon.js';
 export type { default as HeadlessWorkerExecutorType } from './headless-worker-executor.js';
 export type { default as ContainerWorkerPoolType } from './container-worker-pool.js';
 export type { default as WorkerQueueType } from './worker-queue.js';

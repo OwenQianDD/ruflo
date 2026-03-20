@@ -921,7 +921,62 @@ npx @claude-flow/cli@latest attention cache clear
 
 ---
 
-**Status:** Proposed
+---
+
+## WASM-Native Implementations (2026-03-17 Update)
+
+The `@ruvector/ruvllm-wasm@2.0.0` package now provides native WASM implementations of several attention and intelligence components described in this ADR. These run at near-native speed without GPU requirements.
+
+### Available WASM Components
+
+| This ADR Concept | ruvllm-wasm Class | Status |
+|------------------|-------------------|--------|
+| HNSW Search (150x-12,500x) | `HnswRouterWasm` | Published, working (v2.0.1) |
+| SONA Adaptation (<0.05ms) | `SonaInstantWasm` | Published, working |
+| KV Cache Management | `KvCacheWasm` | Published, working |
+| LoRA Adaptation | `MicroLoraWasm` | Published, working (ranks 1-4, <10KB) |
+| Memory Pool / Buffer | `BufferPoolWasm` | Published, working |
+| Inference Arena | `InferenceArenaWasm` | Published, working |
+
+### WASM vs JavaScript Performance
+
+| Component | JS Implementation | WASM Implementation | Expected Speedup |
+|-----------|-------------------|---------------------|------------------|
+| HNSW Search | `FlashAttention` (JS) | `HnswRouterWasm` | 5-50x |
+| SONA Adapt | `SemanticRouter` (JS) | `SonaInstantWasm` | 10-100x |
+| LoRA Train | `LoRAAdapter` (JS) | `MicroLoraWasm` | 3-10x |
+| KV Cache | Manual `Map<>` | `KvCacheWasm` | 2-5x |
+
+### Integration Pattern
+
+```typescript
+// Detection and fallback
+import { isRuvllmWasmAvailable, initRuvllmWasm } from '../ruvector/ruvllm-wasm.js';
+
+if (await isRuvllmWasmAvailable()) {
+  await initRuvllmWasm();
+  // Use WASM-native HNSW, SONA, LoRA
+} else {
+  // Fallback to existing JS implementations
+}
+```
+
+### Known Issues (v2.0.0)
+
+- ~~`HnswRouterWasm.addPattern()` bug~~ — Fixed in v2.0.1 (integer-based geometric distribution replaces `wasm_random()`).
+- Stats objects return WASM pointer objects (`{__wbg_ptr: number}`) — use `.toJson()` or named accessors.
+- `initSync` requires object form: `initSync({ module: bytes })` (not raw bytes).
+
+### References
+
+- ADR-017: RuVector Integration Architecture (updated 2026-03-17 with WASM packages)
+- ADR-059: @ruvector/rvagent-wasm Integration
+- Package: `@ruvector/ruvllm-wasm@2.0.1` on npm
+
+---
+
+**Status:** Proposed (WASM implementations partially available)
 **Priority:** High
-**Estimated Effort:** 5 weeks
+**Estimated Effort:** 5 weeks (reduced with WASM components)
 **Dependencies:** ADR-006 (Memory), ADR-017 (RuVector)
+**Updated:** 2026-03-17

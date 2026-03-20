@@ -33,7 +33,7 @@ const trainCommand: Command = {
     { command: 'claude-flow neural train -p security --wasm --contrastive', description: 'Security patterns with contrastive learning' },
   ],
   action: async (ctx: CommandContext): Promise<CommandResult> => {
-    const patternType = ctx.flags.pattern as string || 'coordination';
+    const patternType = (ctx.flags.pattern || ctx.flags.patternType || ctx.flags['pattern-type']) as string || 'coordination';
     const epochs = parseInt(ctx.flags.epochs as string || '50', 10);
     const learningRate = parseFloat(ctx.flags['learning-rate'] as string || '0.01');
     const batchSize = parseInt(ctx.flags['batch-size'] as string || '32', 10);
@@ -83,7 +83,8 @@ const trainCommand: Command = {
 
         if (initResult.success) {
           wasmFeatures = initResult.features;
-          spinner.setText(`RuVector initialized: ${wasmFeatures.join(', ')}`);
+          const backendLabel = initResult.backend === 'wasm' ? 'WASM' : 'JS fallback';
+          spinner.setText(`RuVector initialized [${backendLabel}]: ${wasmFeatures.join(', ')}`);
         } else {
           output.writeln(output.warning(`WASM init failed: ${initResult.error} - falling back`));
         }
@@ -318,7 +319,9 @@ const trainCommand: Command = {
 
       // Add WASM-specific metrics
       if (useWasm && wasmFeatures.length > 0) {
+        const backendUsed = ruvectorStats?.backend || 'unknown';
         tableData.push(
+          { metric: 'Backend', value: backendUsed === 'wasm' ? 'WASM (native)' : 'JS (fallback)' },
           { metric: 'WASM Features', value: wasmFeatures.slice(0, 3).join(', ') },
           { metric: 'LoRA Adaptations', value: String(adaptations) },
           { metric: 'Avg Loss', value: (totalLoss / Math.max(1, epochs)).toFixed(4) }
@@ -362,7 +365,11 @@ const trainCommand: Command = {
       output.writeln(output.success(`✓ ${patternsRecorded} patterns saved to ${persistence.patternsFile}`));
 
       if (useWasm && wasmFeatures.length > 0) {
-        output.writeln(output.highlight(`✓ RuVector WASM: ${wasmFeatures.join(', ')}`));
+        const backendUsed = ruvectorStats?.backend || 'unknown';
+        const backendMsg = backendUsed === 'wasm'
+          ? `RuVector WASM backend: ${wasmFeatures.join(', ')}`
+          : `RuVector JS fallback (install @ruvector/learning-wasm for native speed): ${wasmFeatures.join(', ')}`;
+        output.writeln(output.highlight(`✓ ${backendMsg}`));
       }
 
       return {
@@ -448,10 +455,10 @@ const statusCommand: Command = {
               : 'Not initialized',
           },
           {
-            component: 'RuVector WASM',
+            component: 'RuVector Training',
             status: ruvectorStats.initialized ? output.success('Active') : output.dim('Not loaded'),
             details: ruvectorStats.initialized
-              ? `MicroLoRA: ${ruvectorStats.totalAdaptations} adapts`
+              ? `${ruvectorStats.backend === 'wasm' ? 'WASM' : 'JS fallback'} | MicroLoRA: ${ruvectorStats.totalAdaptations} adapts`
               : 'Call neural train to initialize',
           },
           {

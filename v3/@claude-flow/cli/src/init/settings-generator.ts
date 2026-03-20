@@ -168,6 +168,15 @@ export function generateSettings(options: InitOptions): object {
 const IS_WINDOWS = process.platform === 'win32';
 
 /**
+ * Platform-aware project dir variable reference.
+ * Claude Code sets $CLAUDE_PROJECT_DIR (Unix) / %CLAUDE_PROJECT_DIR% (Windows)
+ * as an environment variable before running hook commands.
+ */
+function projectDirVar(): string {
+  return IS_WINDOWS ? '%CLAUDE_PROJECT_DIR%' : '$CLAUDE_PROJECT_DIR';
+}
+
+/**
  * Build a cross-platform hook command.
  * On Windows, wraps with `cmd /c` to avoid PowerShell stdin/process issues
  * that cause "UserPromptSubmit hook error" in Claude Code.
@@ -187,12 +196,16 @@ function hookCmdEsm(script: string, subcommand: string): string {
 
 /** Shorthand for CJS hook-handler commands */
 function hookHandlerCmd(subcommand: string): string {
-  return hookCmd('"$CLAUDE_PROJECT_DIR/.claude/helpers/hook-handler.cjs"', subcommand);
+  const dir = projectDirVar();
+  const quote = IS_WINDOWS ? '' : '"';
+  return hookCmd(`${quote}${dir}/.claude/helpers/hook-handler.cjs${quote}`, subcommand);
 }
 
 /** Shorthand for ESM auto-memory-hook commands */
 function autoMemoryCmd(subcommand: string): string {
-  return hookCmdEsm('"$CLAUDE_PROJECT_DIR/.claude/helpers/auto-memory-hook.mjs"', subcommand);
+  const dir = projectDirVar();
+  const quote = IS_WINDOWS ? '' : '"';
+  return hookCmdEsm(`${quote}${dir}/.claude/helpers/auto-memory-hook.mjs${quote}`, subcommand);
 }
 
 /**
@@ -205,9 +218,11 @@ function generateStatusLineConfig(_options: InitOptions): object {
   // The script runs after each assistant message (debounced 300ms).
   // NOTE: statusline must NOT use `cmd /c` — Claude Code manages its stdin
   // directly for statusline commands, and `cmd /c` blocks stdin forwarding.
+  const dir = projectDirVar();
+  const quote = IS_WINDOWS ? '' : '"';
   return {
     type: 'command',
-    command: `node "$CLAUDE_PROJECT_DIR/.claude/helpers/statusline.cjs"`,
+    command: `node ${quote}${dir}/.claude/helpers/statusline.cjs${quote}`,
   };
 }
 

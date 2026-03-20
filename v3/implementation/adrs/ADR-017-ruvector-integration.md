@@ -1528,6 +1528,72 @@ All builds pass successfully:
 
 ---
 
+---
+
+## WASM Package Integrations (2026-03-17)
+
+In addition to the original `ruvector` (core) package, two WASM packages have been integrated as optional dependencies, extending the RuVector integration surface to cover sandboxed agent runtimes and browser-native LLM inference.
+
+### @ruvector/rvagent-wasm v0.1.0 (ADR-059)
+
+Sandboxed AI agent runtime compiled to WebAssembly. See ADR-059 for full details.
+
+| Component | Description |
+|-----------|-------------|
+| `WasmAgent` | LLM agent with virtual filesystem (no OS access) |
+| `WasmGallery` | 6 pre-built agent templates (Coder, Researcher, Tester, Reviewer, Security, Swarm) |
+| `WasmMcpServer` | JSON-RPC 2.0 MCP server running entirely in WASM |
+| `WasmRvfBuilder` | RVF binary container format for multi-agent packaging |
+
+**Integration module**: `src/ruvector/agent-wasm.ts` (22 exports)
+**MCP tools**: `src/mcp-tools/wasm-agent-tools.ts` (10 tools)
+
+### @ruvector/ruvllm-wasm v2.0.1
+
+Browser-native LLM inference runtime with WASM-accelerated intelligence components. Provides native WASM implementations of several capabilities previously only available via JavaScript approximations.
+
+| Component | Description | Replaces/Enhances |
+|-----------|-------------|-------------------|
+| `RuvLLMWasm` | Core inference runtime (init, reset, version) | New capability |
+| `HnswRouterWasm` | WASM-native HNSW for semantic routing | Enhances ADR-028 HNSW search |
+| `SonaInstantWasm` | <1ms adaptation with WASM performance | Enhances SONA (ADR-028) |
+| `MicroLoraWasm` | Ultra-lightweight LoRA adaptation (ranks 1-4, <10KB) | Enhances LoRA adapter |
+| `ChatTemplateWasm` | Chat formatting (Llama3, Mistral, ChatML, Phi, Gemma, Qwen) | New capability |
+| `KvCacheWasm` | KV cache management for inference | Enhances ADR-028 KV cache |
+| `BufferPoolWasm` | Memory pool with prewarm and hit-rate tracking | New capability |
+| `InferenceArenaWasm` | Bump allocator for inference workloads | New capability |
+| `GenerateConfig` | Generation configuration (temp, top-p/k, repetition penalty) | New capability |
+
+**Node.js init pattern**: Uses `initSync({ module: bytes })` (not browser `init()` which requires Fetch API).
+
+**Resolved (v2.0.1)**: `HnswRouterWasm.addPattern()` `.ln()` bug fixed — replaced `wasm_random()` with integer-based geometric distribution in `select_layer()`. Published as v2.0.1.
+
+**Integration module**: `src/ruvector/ruvllm-wasm.ts` (planned)
+**MCP tools**: `src/mcp-tools/ruvllm-tools.ts` (planned)
+
+### Package Dependency Summary
+
+```json
+"optionalDependencies": {
+  "ruvector": "^1.0.0",
+  "@ruvector/rvagent-wasm": "^0.1.0",
+  "@ruvector/ruvllm-wasm": "^2.0.1",
+  "@ruvector/sona": "^0.1.5"
+}
+```
+
+### Cross-ADR Impact
+
+| ADR | Impact |
+|-----|--------|
+| ADR-028 (Neural Attention) | HNSW, SONA, KV Cache now available as native WASM via ruvllm-wasm |
+| ADR-059 (rvagent-wasm) | Full integration documented |
+| ADR-006 (Unified Memory) | HNSW search can use WasmHNSW backend |
+| ADR-026 (Agent Booster) | WASM agents provide Tier-0 sandboxed execution |
+
+---
+
 **Status:** ✅ Complete (All Features Implemented)
 **Completed:** 2026-01-07
+**Updated:** 2026-03-17 (WASM package integrations added)
 **Total Lines:** Route (678) + Analyze (2114) = 2792 lines

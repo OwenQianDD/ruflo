@@ -25,7 +25,7 @@
 
 </div>
 
-> **Why Ruflo?** Claude Flow is now Ruflo — named by Ruv, who loves Rust, flow states, and building things that feel inevitable. The "Ru" is the Ruv. The "flo" is the flow. Underneath, WASM kernels written in Rust power the policy engine, embeddings, and proof system. 5,800 commits later, the alpha is over. This is v3.5.
+> **Why Ruflo?** Claude Flow is now Ruflo — named by Ruv, who loves Rust, flow states, and building things that feel inevitable. The "Ru" is the Ruv. The "flo" is the flow. Underneath, WASM kernels written in Rust power the policy engine, embeddings, and proof system. 5,900+ commits later, the alpha is over. This is v3.5.
 
 ## Getting into the Flow
 
@@ -160,6 +160,8 @@ curl -fsSL https://cdn.jsdelivr.net/gh/ruvnet/claude-flow@main/scripts/install.s
 # Or via npx
 npx ruflo@latest init --wizard
 ```
+
+> **New to Ruflo?** You don't need to learn 259 MCP tools or 26 CLI commands. After running `init`, just use Claude Code normally — the hooks system automatically routes tasks to the right agents, learns from successful patterns, and coordinates multi-agent work in the background. The advanced tools exist for fine-grained control when you need it.
 
 ---
 ### Key Capabilities
@@ -697,12 +699,12 @@ claude mcp add ruflo -- npx -y ruflo@latest mcp start
 claude mcp list
 ```
 
-Once added, Claude Code can use all 175+ ruflo MCP tools directly:
+Once added, Claude Code can use all 259 ruflo MCP tools directly:
 - `swarm_init` - Initialize agent swarms
 - `agent_spawn` - Spawn specialized agents
 - `memory_search` - Search patterns with HNSW vector search
 - `hooks_route` - Intelligent task routing
-- And 170+ more tools...
+- And 255+ more tools...
 
 ---
 ## What is it exactly? Agents that learn, build and work perpetually. 
@@ -752,7 +754,7 @@ Ruflo v3 introduces **self-learning neural capabilities** that no other agent or
 
 | Feature | Ruflo v3 | CrewAI | LangGraph | AutoGen | Manus |
 |---------|----------------|--------|-----------|---------|-------|
-| **MCP Integration** | ✅ Native (170+ tools) | ⛔ | ⛔ | ⛔ | ⛔ |
+| **MCP Integration** | ✅ Native (259 tools) | ⛔ | ⛔ | ⛔ | ⛔ |
 | **Skills System** | ✅ 42+ pre-built | ⛔ | ⛔ | ⛔ | Limited |
 | **Stream Pipelines** | ✅ JSON chains | ⛔ | Via code | ⛔ | ⛔ |
 | **Pair Programming** | ✅ Driver/Navigator | ⛔ | ⛔ | ⛔ | ⛔ |
@@ -2158,7 +2160,7 @@ npx ruflo@v3alpha worker status
 | `agentConfigs` | 15 V3 agent configurations | Agent testing |
 | `memoryEntries` | Patterns, rules, embeddings | Memory testing |
 | `swarmConfigs` | V3 default, minimal, mesh, hierarchical | Swarm testing |
-| `mcpTools` | 175+ tool definitions | MCP testing |
+| `mcpTools` | 259 tool definitions | MCP testing |
 
 </details>
 
@@ -5018,9 +5020,9 @@ npx agentic-flow mcp stdio
 </details>
 
 <details>
-<summary>🔧 <strong>MCP Tools</strong> — 213+ Integration Tools</summary>
+<summary>🔧 <strong>MCP Tools</strong> — 259 Integration Tools</summary>
 
-Agentic-flow exposes 213+ MCP tools for integration:
+Agentic-flow exposes 259 MCP tools for integration:
 
 | Category | Tools | Examples |
 |----------|-------|----------|

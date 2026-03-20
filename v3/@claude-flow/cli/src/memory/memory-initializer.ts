@@ -639,6 +639,16 @@ export function clearHNSWIndex(): void {
   hnswIndex = null;
 }
 
+/**
+ * Invalidate the in-memory HNSW cache so the next search rebuilds from DB.
+ * Call this after deleting entries that had embeddings to prevent ghost
+ * vectors from appearing in search results.
+ */
+export function rebuildSearchIndex(): void {
+  hnswIndex = null;
+  hnswInitializing = false;
+}
+
 // ============================================================================
 // INT8 VECTOR QUANTIZATION (4x memory reduction)
 // ============================================================================
@@ -1575,6 +1585,44 @@ export async function loadEmbeddingModel(options?: {
       };
     }
 
+    // Fallback: Check for ruvector ONNX embedder (bundled MiniLM-L6-v2 since v0.2.15)
+    // v0.2.16: LoRA B=0 fix makes AdaptiveEmbedder safe (identity when untrained)
+    // Note: isReady() returns false until first embed() call (lazy init), so we
+    // skip the isReady() gate and verify with a probe embed instead.
+    const ruvector = await import('ruvector').catch(() => null);
+
+    if (ruvector?.initOnnxEmbedder) {
+      try {
+        await ruvector.initOnnxEmbedder();
+
+        // Fallback: OptimizedOnnxEmbedder (raw ONNX, lazy-inits on first embed)
+        const onnxEmb = ruvector.getOptimizedOnnxEmbedder?.();
+        if (onnxEmb?.embed) {
+          // Probe embed to trigger lazy ONNX init and verify it works
+          const probe = await onnxEmb.embed('test');
+          if (probe && probe.length > 0 && (Array.isArray(probe) ? probe.some((v: number) => v !== 0) : true)) {
+            if (verbose) {
+              console.log(`Loading ruvector ONNX embedder (all-MiniLM-L6-v2, ${probe.length}d)...`);
+            }
+            embeddingModelState = {
+              loaded: true,
+              model: (text: string) => onnxEmb.embed(text),
+              tokenizer: null,
+              dimensions: probe.length || 384
+            };
+            return {
+              success: true,
+              dimensions: probe.length || 384,
+              modelName: 'ruvector/onnx',
+              loadTime: Date.now() - startTime
+            };
+          }
+        }
+      } catch {
+        // ruvector ONNX init failed, continue to next fallback
+      }
+    }
+
     // Legacy fallback: Check for agentic-flow core embeddings
     const agenticFlow = await import('agentic-flow').catch(() => null);
 
@@ -1649,12 +1697,17 @@ export async function generateEmbedding(text: string): Promise<{
   if (state.model && typeof (state.model as any) === 'function') {
     try {
       const output = await (state.model as any)(text, { pooling: 'mean', normalize: true });
-      const embedding = Array.from(output.data as Float32Array);
-      return {
-        embedding,
-        dimensions: embedding.length,
-        model: 'onnx'
-      };
+      // Handle both @xenova/transformers (output.data) and ruvector (plain array) formats
+      const embedding = output?.data
+        ? Array.from(output.data as Float32Array)
+        : Array.isArray(output) ? output : null;
+      if (embedding) {
+        return {
+          embedding,
+          dimensions: embedding.length,
+          model: 'onnx'
+        };
+      }
     } catch {
       // Fall through to fallback
     }
@@ -2573,10 +2626,16 @@ export async function deleteEntry(options: {
       };
     }
 
+    // Capture the entry ID for HNSW cleanup
+    const entryId = String(checkResult[0].values[0][0]);
+
     // Delete the entry (soft delete by setting status to 'deleted')
+    // Also null out the embedding to clean up vector data from SQLite
     db.run(`
       UPDATE memory_entries
-      SET status = 'deleted', updated_at = strftime('%s', 'now') * 1000
+      SET status = 'deleted',
+          embedding = NULL,
+          updated_at = strftime('%s', 'now') * 1000
       WHERE key = '${key.replace(/'/g, "''")}'
         AND namespace = '${namespace.replace(/'/g, "''")}'
         AND status = 'active'
@@ -2591,6 +2650,18 @@ export async function deleteEntry(options: {
     fs.writeFileSync(dbPath, Buffer.from(data));
 
     db.close();
+
+    // Clean up in-memory HNSW index so ghost vectors don't appear in searches.
+    // Remove the entry from the HNSW entries map and invalidate the index.
+    // The next search will rebuild the HNSW index from the remaining DB rows.
+    if (hnswIndex?.entries) {
+      hnswIndex.entries.delete(entryId);
+      saveHNSWMetadata();
+      // Invalidate the HNSW index so it rebuilds from DB on next search.
+      // We can't surgically remove a vector from the HNSW graph, so we
+      // clear the entire index; it will be lazily rebuilt from SQLite.
+      rebuildSearchIndex();
+    }
 
     return {
       success: true,
@@ -2625,6 +2696,7 @@ export default {
   listEntries,
   getEntry,
   deleteEntry,
+  rebuildSearchIndex,
   MEMORY_SCHEMA_V3,
   getInitialMetadata
 };

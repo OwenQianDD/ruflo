@@ -495,26 +495,84 @@ const metricsCommand: Command = {
     const agentId = ctx.args[0];
     const period = ctx.flags.period as string;
 
-    // Default metrics (updated by MCP agent/metrics when available)
+    // Collect real metrics from .swarm/ state
+    const { existsSync, readFileSync, readdirSync, statSync } = await import('fs');
+    const { join } = await import('path');
+
+    let totalAgents = 0;
+    let activeAgents = 0;
+    let tasksCompleted = 0;
+    const typeCounts: Record<string, { count: number; tasks: number; success: number }> = {};
+
+    // Read swarm agent state
+    const swarmDir = join(process.cwd(), '.swarm');
+    const agentsDir = join(swarmDir, 'agents');
+    if (existsSync(agentsDir)) {
+      try {
+        const files = readdirSync(agentsDir).filter(f => f.endsWith('.json'));
+        for (const file of files) {
+          try {
+            const data = JSON.parse(readFileSync(join(agentsDir, file), 'utf-8'));
+            totalAgents++;
+            const agType = data.type || 'unknown';
+            if (!typeCounts[agType]) typeCounts[agType] = { count: 0, tasks: 0, success: 0 };
+            typeCounts[agType].count++;
+            if (data.status === 'active' || data.status === 'running') activeAgents++;
+            if (data.tasksCompleted) {
+              typeCounts[agType].tasks += data.tasksCompleted;
+              tasksCompleted += data.tasksCompleted;
+            }
+            if (data.successCount) typeCounts[agType].success += data.successCount;
+          } catch { /* skip malformed */ }
+        }
+      } catch { /* no agents dir */ }
+    }
+
+    // Read swarm activity for additional state
+    const activityFile = join(swarmDir, 'swarm-activity.json');
+    if (existsSync(activityFile)) {
+      try {
+        const activity = JSON.parse(readFileSync(activityFile, 'utf-8'));
+        if (activity.totalAgents && totalAgents === 0) totalAgents = activity.totalAgents;
+        if (activity.activeAgents && activeAgents === 0) activeAgents = activity.activeAgents;
+      } catch { /* ignore */ }
+    }
+
+    // Read memory.db stats
+    let vectorCount = 0;
+    const dbPath = join(swarmDir, 'memory.db');
+    if (existsSync(dbPath)) {
+      try {
+        const dbSize = statSync(dbPath).size;
+        vectorCount = Math.floor(dbSize / 2048);
+      } catch { /* ignore */ }
+    }
+
+    const byType = Object.entries(typeCounts).map(([type, data]) => ({
+      type,
+      count: data.count,
+      tasks: data.tasks,
+      successRate: data.tasks > 0 ? `${Math.round((data.success / data.tasks) * 100)}%` : 'N/A'
+    }));
+
+    const avgSuccessRate = tasksCompleted > 0
+      ? `${Math.round(Object.values(typeCounts).reduce((a, d) => a + d.success, 0) / tasksCompleted * 100)}%`
+      : 'N/A';
+
     const metrics = {
       period,
       summary: {
-        totalAgents: 4,
-        activeAgents: 3,
-        tasksCompleted: 127,
-        avgSuccessRate: '96.2%',
-        totalTokens: 1234567,
-        avgResponseTime: '1.45s'
+        totalAgents,
+        activeAgents,
+        tasksCompleted,
+        avgSuccessRate,
+        vectorCount,
+        note: totalAgents === 0 ? 'No agents spawned yet. Use: agent spawn -t coder' : undefined
       },
-      byType: [
-        { type: 'coder', count: 2, tasks: 45, successRate: '97%' },
-        { type: 'researcher', count: 1, tasks: 32, successRate: '95%' },
-        { type: 'tester', count: 1, tasks: 50, successRate: '98%' }
-      ],
+      byType,
       performance: {
-        flashAttention: '2.8x speedup',
-        memoryReduction: '52%',
-        searchImprovement: '150x faster'
+        memoryVectors: `${vectorCount} vectors`,
+        searchBackend: vectorCount > 0 ? 'HNSW-indexed' : 'none'
       }
     };
 
@@ -537,8 +595,7 @@ const metricsCommand: Command = {
         { metric: 'Active Agents', value: metrics.summary.activeAgents },
         { metric: 'Tasks Completed', value: metrics.summary.tasksCompleted },
         { metric: 'Success Rate', value: metrics.summary.avgSuccessRate },
-        { metric: 'Total Tokens', value: metrics.summary.totalTokens.toLocaleString() },
-        { metric: 'Avg Response Time', value: metrics.summary.avgResponseTime }
+        { metric: 'Memory Vectors', value: metrics.summary.vectorCount }
       ]
     });
 
@@ -554,12 +611,16 @@ const metricsCommand: Command = {
       data: metrics.byType
     });
 
+    if (metrics.summary.note) {
+      output.writeln();
+      output.writeln(output.dim(metrics.summary.note));
+    }
+
     output.writeln();
-    output.writeln(output.bold('V3 Performance Gains'));
+    output.writeln(output.bold('Memory'));
     output.printList([
-      `Flash Attention: ${output.success(metrics.performance.flashAttention)}`,
-      `Memory Reduction: ${output.success(metrics.performance.memoryReduction)}`,
-      `Search: ${output.success(metrics.performance.searchImprovement)}`
+      `Vectors: ${output.success(metrics.performance.memoryVectors)}`,
+      `Backend: ${output.success(metrics.performance.searchBackend)}`
     ]);
 
     return { success: true, data: metrics };

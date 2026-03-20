@@ -513,6 +513,75 @@ export class EWCConsolidator {
   }
 
   /**
+   * Update Fisher matrix from pattern confidence changes.
+   * Called by SONA after distillLearning to track which patterns
+   * are important and should be protected from forgetting.
+   *
+   * Uses online averaging: F_new = alpha * F_old + (1-alpha) * F_current
+   *
+   * @param confidenceChanges - Array of {id, embedding, oldConf, newConf}
+   */
+  updateFisherFromConfidences(
+    confidenceChanges: { id: string; embedding: number[]; oldConf: number; newConf: number }[]
+  ): void {
+    if (confidenceChanges.length === 0) return;
+
+    const alpha = this.config.fisherDecayRate;
+    const currentFisher = new Array(this.config.dimensions).fill(0);
+    let sampleCount = 0;
+
+    for (const change of confidenceChanges) {
+      if (!change.embedding || change.embedding.length === 0) continue;
+
+      const confDelta = Math.abs(change.newConf - change.oldConf);
+      if (confDelta === 0) continue;
+
+      sampleCount++;
+      const len = Math.min(change.embedding.length, this.config.dimensions);
+
+      // Squared gradient proxy: embedding scaled by confidence change magnitude
+      for (let i = 0; i < len; i++) {
+        const grad = change.embedding[i] * confDelta;
+        currentFisher[i] += grad * grad;
+      }
+    }
+
+    if (sampleCount > 0) {
+      for (let i = 0; i < this.config.dimensions; i++) {
+        currentFisher[i] /= sampleCount;
+      }
+    }
+
+    // Online EMA: F_new = alpha * F_old + (1-alpha) * F_current
+    for (let i = 0; i < this.config.dimensions; i++) {
+      this.globalFisher[i] = alpha * this.globalFisher[i] + (1 - alpha) * currentFisher[i];
+    }
+
+    this.saveToDisk();
+  }
+
+  /**
+   * Compute consolidation penalty for a proposed confidence update.
+   * Used by SONA to check whether a pattern update would cause forgetting.
+   *
+   * @param oldConfidence - Current confidence value
+   * @param newConfidence - Proposed new confidence value
+   * @returns Penalty value (higher = more forgetting risk)
+   */
+  computeConfidencePenalty(oldConfidence: number, newConfidence: number): number {
+    // Use the global Fisher to estimate penalty for scalar confidence change
+    // Average Fisher value represents overall importance
+    let avgFisher = 0;
+    for (let i = 0; i < this.globalFisher.length; i++) {
+      avgFisher += this.globalFisher[i];
+    }
+    avgFisher = this.globalFisher.length > 0 ? avgFisher / this.globalFisher.length : 0;
+
+    const diff = newConfidence - oldConfidence;
+    return (this.config.lambda / 2) * avgFisher * diff * diff;
+  }
+
+  /**
    * Clear all patterns and history (full reset)
    */
   clear(): void {

@@ -38,12 +38,42 @@ interface SyncState {
   pendingChanges: number;
 }
 
+interface CoordConsensusProposal {
+  proposalId: string;
+  type: string;
+  proposal: unknown;
+  proposedBy: string;
+  proposedAt: string;
+  votes: Record<string, boolean>;
+  status: string;
+  strategy: string;
+  term?: number;
+  quorumPreset?: string;
+  byzantineVoters?: string[];
+}
+
+interface CoordConsensusResult {
+  proposalId: string;
+  result: string;
+  votes: { for: number; against: number };
+  decidedAt: string;
+  strategy: string;
+  term?: number;
+  byzantineDetected?: string[];
+}
+
+interface CoordConsensusState {
+  pending: CoordConsensusProposal[];
+  history: CoordConsensusResult[];
+}
+
 interface CoordinationStore {
   topology: TopologyConfig;
   loadBalance: LoadBalanceConfig;
   sync: SyncState;
   nodes: Record<string, { id: string; status: string; load: number; lastHeartbeat: string }>;
   version: string;
+  consensus?: CoordConsensusState;
 }
 
 function getCoordDir(): string {
@@ -421,61 +451,242 @@ export const coordinationTools: MCPTool[] = [
   },
   {
     name: 'coordination_consensus',
-    description: 'Manage consensus protocol',
+    description: 'Manage consensus protocol with BFT, Raft, or Quorum strategies',
     category: 'coordination',
     inputSchema: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['status', 'propose', 'vote', 'commit'], description: 'Action to perform' },
-        proposal: { type: 'object', description: 'Proposal data' },
+        proposal: { type: 'object', description: 'Proposal data (for propose)' },
+        proposalId: { type: 'string', description: 'Proposal ID (for vote/commit/status)' },
         vote: { type: 'string', enum: ['accept', 'reject'], description: 'Vote' },
+        voterId: { type: 'string', description: 'Voter node ID' },
+        strategy: { type: 'string', enum: ['bft', 'raft', 'quorum'], description: 'Consensus strategy (default: raft)' },
+        quorumPreset: { type: 'string', enum: ['unanimous', 'majority', 'supermajority'], description: 'Quorum threshold preset (default: majority)' },
+        term: { type: 'number', description: 'Term number (for raft strategy)' },
       },
     },
     handler: async (input) => {
       const store = loadCoordStore();
       const action = (input.action as string) || 'status';
+      const strategy = (input.strategy as string) || 'raft';
+      const nodeCount = Object.keys(store.nodes).length || 1;
+
+      // Initialize consensus storage in the coordination store if missing
+      if (!store.consensus) {
+        store.consensus = { pending: [], history: [] };
+      }
+      const consensus = store.consensus;
+
+      function calcRequired(strat: string, total: number, preset?: string): number {
+        if (total <= 0) return 1;
+        if (strat === 'bft') return Math.floor((total * 2) / 3) + 1;
+        if (strat === 'quorum') {
+          if (preset === 'unanimous') return total;
+          if (preset === 'supermajority') return Math.floor((total * 2) / 3) + 1;
+        }
+        return Math.floor(total / 2) + 1;
+      }
 
       if (action === 'status') {
-        const nodeCount = Object.keys(store.nodes).length;
-        const quorum = Math.floor(nodeCount / 2) + 1;
+        if (input.proposalId) {
+          // Status for specific proposal
+          const p = consensus.pending.find(x => x.proposalId === input.proposalId);
+          if (p) {
+            const votesFor = Object.values(p.votes).filter(v => v).length;
+            const votesAgainst = Object.values(p.votes).filter(v => !v).length;
+            return {
+              success: true,
+              proposalId: p.proposalId,
+              strategy: p.strategy,
+              status: p.status,
+              votesFor,
+              votesAgainst,
+              required: calcRequired(p.strategy, nodeCount, p.quorumPreset),
+              totalNodes: nodeCount,
+              resolved: false,
+            };
+          }
+          const h = consensus.history.find(x => x.proposalId === input.proposalId);
+          if (h) return { success: true, ...h, resolved: true, historical: true };
+          return { success: false, error: 'Proposal not found' };
+        }
 
+        const quorum = calcRequired(strategy, nodeCount);
         return {
           success: true,
           algorithm: store.topology.consensusAlgorithm,
+          strategy,
           nodes: nodeCount,
           quorum,
+          pendingProposals: consensus.pending.length,
+          resolvedProposals: consensus.history.length,
           status: nodeCount >= quorum ? 'operational' : 'degraded',
         };
       }
 
       if (action === 'propose') {
-        const proposalId = `proposal-${Date.now()}`;
+        const proposalId = `proposal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const quorumPreset = (input.quorumPreset as string) || 'majority';
+        const term = (input.term as number) || 1;
+        const required = calcRequired(strategy, nodeCount, quorumPreset);
+
+        // Raft: one pending proposal per term
+        if (strategy === 'raft') {
+          const existing = consensus.pending.find(p => p.strategy === 'raft' && p.term === term);
+          if (existing) {
+            return {
+              success: false,
+              error: `Raft term ${term} already has pending proposal: ${existing.proposalId}`,
+              existingProposalId: existing.proposalId,
+            };
+          }
+        }
+
+        consensus.pending.push({
+          proposalId,
+          type: 'coordination',
+          proposal: input.proposal,
+          proposedBy: (input.voterId as string) || 'system',
+          proposedAt: new Date().toISOString(),
+          votes: {},
+          status: 'pending',
+          strategy,
+          term: strategy === 'raft' ? term : undefined,
+          quorumPreset: strategy === 'quorum' ? quorumPreset : undefined,
+          byzantineVoters: strategy === 'bft' ? [] : undefined,
+        });
+
+        saveCoordStore(store);
 
         return {
           success: true,
           action: 'proposed',
           proposalId,
           proposal: input.proposal,
+          strategy,
           status: 'pending',
-          requiredVotes: Math.floor(Object.keys(store.nodes).length / 2) + 1,
+          required,
+          totalNodes: nodeCount,
+          term: strategy === 'raft' ? term : undefined,
         };
       }
 
       if (action === 'vote') {
+        const p = consensus.pending.find(x => x.proposalId === input.proposalId);
+        if (!p) return { success: false, error: 'Proposal not found or already resolved' };
+
+        const voterId = input.voterId as string;
+        if (!voterId) return { success: false, error: 'voterId is required' };
+
+        const voteValue = input.vote === 'accept';
+        const pStrategy = p.strategy || 'raft';
+        const required = calcRequired(pStrategy, nodeCount, p.quorumPreset);
+
+        // Double-vote prevention
+        if (voterId in p.votes) {
+          if (pStrategy === 'bft' && p.votes[voterId] !== voteValue) {
+            if (!p.byzantineVoters) p.byzantineVoters = [];
+            if (!p.byzantineVoters.includes(voterId)) p.byzantineVoters.push(voterId);
+            delete p.votes[voterId];
+            saveCoordStore(store);
+            return {
+              success: false,
+              byzantineDetected: true,
+              message: `Byzantine behavior: voter ${voterId} attempted conflicting vote. Vote invalidated.`,
+              byzantineVoters: p.byzantineVoters,
+            };
+          }
+          return { success: false, error: `Voter ${voterId} has already voted on this proposal` };
+        }
+
+        // BFT cross-proposal conflict check
+        if (pStrategy === 'bft') {
+          for (const other of consensus.pending) {
+            if (other.proposalId === p.proposalId) continue;
+            if (voterId in other.votes && other.votes[voterId] !== voteValue) {
+              if (!p.byzantineVoters) p.byzantineVoters = [];
+              if (!p.byzantineVoters.includes(voterId)) p.byzantineVoters.push(voterId);
+              saveCoordStore(store);
+              return {
+                success: false,
+                byzantineDetected: true,
+                message: `Byzantine behavior: voter ${voterId} cast conflicting votes across proposals.`,
+                byzantineVoters: p.byzantineVoters,
+              };
+            }
+          }
+        }
+
+        p.votes[voterId] = voteValue;
+
+        const votesFor = Object.values(p.votes).filter(v => v).length;
+        const votesAgainst = Object.values(p.votes).filter(v => !v).length;
+
+        // Resolution check
+        let resolved = false;
+        let result: string | undefined;
+
+        if (votesFor >= required) {
+          resolved = true;
+          result = 'approved';
+        } else if (votesAgainst >= required) {
+          resolved = true;
+          result = 'rejected';
+        } else if (pStrategy === 'quorum' && p.quorumPreset === 'unanimous' && votesAgainst > 0) {
+          resolved = true;
+          result = 'rejected';
+        }
+
+        if (resolved && result) {
+          p.status = result;
+          consensus.history.push({
+            proposalId: p.proposalId,
+            result,
+            votes: { for: votesFor, against: votesAgainst },
+            decidedAt: new Date().toISOString(),
+            strategy: pStrategy,
+            term: p.term,
+            byzantineDetected: p.byzantineVoters?.length ? p.byzantineVoters : undefined,
+          });
+          consensus.pending = consensus.pending.filter(x => x.proposalId !== p.proposalId);
+        }
+
+        saveCoordStore(store);
+
         return {
           success: true,
           action: 'voted',
+          proposalId: p.proposalId,
+          voterId,
           vote: input.vote,
-          timestamp: new Date().toISOString(),
+          strategy: pStrategy,
+          votesFor,
+          votesAgainst,
+          required,
+          totalNodes: nodeCount,
+          resolved,
+          result: resolved ? result : undefined,
+          status: p.status,
         };
       }
 
       if (action === 'commit') {
-        return {
-          success: true,
-          action: 'committed',
-          committedAt: new Date().toISOString(),
-        };
+        // Commit is a no-op confirmation for already-resolved proposals
+        if (input.proposalId) {
+          const h = consensus.history.find(x => x.proposalId === input.proposalId);
+          if (h) {
+            return {
+              success: true,
+              action: 'committed',
+              proposalId: input.proposalId,
+              result: h.result,
+              committedAt: new Date().toISOString(),
+            };
+          }
+          return { success: false, error: 'Proposal not found in resolved history. Vote must reach quorum first.' };
+        }
+        return { success: false, error: 'proposalId is required for commit' };
       }
 
       return { success: false, error: 'Unknown action' };

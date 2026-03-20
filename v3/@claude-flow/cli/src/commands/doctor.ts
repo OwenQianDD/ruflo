@@ -70,13 +70,14 @@ async function checkNpmVersion(): Promise<HealthCheck> {
 
 // Check config file
 async function checkConfigFile(): Promise<HealthCheck> {
-  const configPaths = [
+  // JSON configs (parse-validated)
+  const jsonPaths = [
     '.claude-flow/config.json',
     'claude-flow.config.json',
     '.claude-flow.json'
   ];
 
-  for (const configPath of configPaths) {
+  for (const configPath of jsonPaths) {
     if (existsSync(configPath)) {
       try {
         const content = readFileSync(configPath, 'utf8');
@@ -85,6 +86,19 @@ async function checkConfigFile(): Promise<HealthCheck> {
       } catch (e) {
         return { name: 'Config File', status: 'fail', message: `Invalid JSON: ${configPath}`, fix: 'Fix JSON syntax in config file' };
       }
+    }
+  }
+
+  // YAML configs (existence-checked only — no heavy yaml parser dependency)
+  const yamlPaths = [
+    '.claude-flow/config.yaml',
+    '.claude-flow/config.yml',
+    'claude-flow.config.yaml'
+  ];
+
+  for (const configPath of yamlPaths) {
+    if (existsSync(configPath)) {
+      return { name: 'Config File', status: 'pass', message: `Found: ${configPath}` };
     }
   }
 
@@ -144,8 +158,13 @@ async function checkApiKeys(): Promise<HealthCheck> {
     }
   }
 
+  // Detect Claude Code environment — API keys are managed internally
+  const inClaudeCode = !!(process.env.CLAUDE_CODE || process.env.CLAUDE_PROJECT_DIR || process.env.MCP_SESSION_ID);
+
   if (found.includes('ANTHROPIC_API_KEY') || found.includes('CLAUDE_API_KEY')) {
     return { name: 'API Keys', status: 'pass', message: `Found: ${found.join(', ')}` };
+  } else if (inClaudeCode) {
+    return { name: 'API Keys', status: 'pass', message: 'Claude Code (managed internally)' };
   } else if (found.length > 0) {
     return { name: 'API Keys', status: 'warn', message: `Found: ${found.join(', ')} (no Claude key)`, fix: 'export ANTHROPIC_API_KEY=your_key' };
   } else {
@@ -187,11 +206,11 @@ async function checkMcpServers(): Promise<HealthCheck> {
         const content = JSON.parse(readFileSync(configPath, 'utf8'));
         const servers = content.mcpServers || content.servers || {};
         const count = Object.keys(servers).length;
-        const hasClaudeFlow = 'claude-flow' in servers || 'claude-flow_alpha' in servers;
+        const hasClaudeFlow = 'claude-flow' in servers || 'claude-flow_alpha' in servers || 'ruflo' in servers || 'ruflo_alpha' in servers;
         if (hasClaudeFlow) {
-          return { name: 'MCP Servers', status: 'pass', message: `${count} servers (claude-flow configured)` };
+          return { name: 'MCP Servers', status: 'pass', message: `${count} servers (ruflo configured)` };
         } else {
-          return { name: 'MCP Servers', status: 'warn', message: `${count} servers (claude-flow not found)`, fix: 'claude mcp add claude-flow npx @claude-flow/cli@v3alpha mcp start' };
+          return { name: 'MCP Servers', status: 'warn', message: `${count} servers (ruflo not found)`, fix: 'claude mcp add ruflo -- npx -y ruflo@latest mcp start' };
         }
       } catch {
         // continue to next path

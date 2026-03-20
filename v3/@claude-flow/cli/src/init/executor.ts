@@ -488,7 +488,7 @@ export async function executeUpgrade(targetDir: string, upgradeSettings = false)
         ddd: { progress: 0, modules: 0, totalFiles: 0, totalLines: 0 },
         swarm: { activeAgents: 0, maxAgents: 15, topology: 'hierarchical-mesh' },
         learning: { status: 'READY', patternsLearned: 0, sessionsCompleted: 0 },
-        _note: 'Metrics will update as you use Claude Flow'
+        _note: 'Metrics will update as you use Ruflo'
       };
       fs.writeFileSync(progressPath, JSON.stringify(progress, null, 2), 'utf-8');
       result.created.push('.claude-flow/metrics/v3-progress.json');
@@ -520,7 +520,7 @@ export async function executeUpgrade(targetDir: string, upgradeSettings = false)
         routing: { accuracy: 0, decisions: 0 },
         patterns: { shortTerm: 0, longTerm: 0, quality: 0 },
         sessions: { total: 0, current: null },
-        _note: 'Intelligence grows as you use Claude Flow'
+        _note: 'Intelligence grows as you use Ruflo'
       };
       fs.writeFileSync(learningPath, JSON.stringify(learning, null, 2), 'utf-8');
       result.created.push('.claude-flow/metrics/learning.json');
@@ -1131,17 +1131,15 @@ async function writeStatusline(
     }
   }
 
-  // ALWAYS generate statusline.cjs — settings.json references this path
-  // regardless of whether advanced statusline files were also copied.
+  // ALWAYS generate statusline.cjs — the generated version includes AgentDB
+  // vectors/size, tests, ADRs, hooks, and integration stats that the
+  // pre-installed static copy in the npm package lacks.
+  // This must overwrite any copy from writeHelpers() which copies the legacy file.
   const statuslineScript = generateStatuslineScript(options);
   const statuslinePath = path.join(helpersDir, 'statusline.cjs');
 
-  if (!fs.existsSync(statuslinePath) || options.force) {
-    fs.writeFileSync(statuslinePath, statuslineScript, 'utf-8');
-    result.created.files.push('.claude/helpers/statusline.cjs');
-  } else {
-    result.skipped.push('.claude/helpers/statusline.cjs');
-  }
+  fs.writeFileSync(statuslinePath, statuslineScript, 'utf-8');
+  result.created.files.push('.claude/helpers/statusline.cjs');
 }
 
 /**
@@ -1274,7 +1272,7 @@ async function writeInitialMetrics(
         patternsLearned: 0,
         sessionsCompleted: 0
       },
-      _note: 'Metrics will update as you use Claude Flow. Run: npx @claude-flow/cli@latest daemon start'
+      _note: 'Metrics will update as you use Ruflo. Run: npx ruflo@latest daemon start'
     };
     fs.writeFileSync(progressPath, JSON.stringify(progress, null, 2), 'utf-8');
     result.created.files.push('.claude-flow/metrics/v3-progress.json');
@@ -1323,7 +1321,7 @@ async function writeInitialMetrics(
         total: 0,
         current: null
       },
-      _note: 'Intelligence grows as you use Claude Flow'
+      _note: 'Intelligence grows as you use Ruflo'
     };
     fs.writeFileSync(learningPath, JSON.stringify(learning, null, 2), 'utf-8');
     result.created.files.push('.claude-flow/metrics/learning.json');
@@ -1346,7 +1344,7 @@ async function writeInitialMetrics(
 }
 
 /**
- * Write CAPABILITIES.md - comprehensive overview of all Claude Flow features
+ * Write CAPABILITIES.md - comprehensive overview of all Ruflo features
  */
 async function writeCapabilitiesDoc(
   targetDir: string,
@@ -1711,8 +1709,8 @@ npx @claude-flow/cli@latest hive-mind consensus --propose "task"
 
 ### MCP Server Setup
 \`\`\`bash
-# Add Claude Flow MCP
-claude mcp add claude-flow -- npx -y @claude-flow/cli@latest
+# Add Ruflo MCP
+claude mcp add ruflo -- npx -y ruflo@latest
 
 # Optional servers
 claude mcp add ruv-swarm -- npx -y ruv-swarm mcp start
@@ -1726,24 +1724,24 @@ claude mcp add flow-nexus -- npx -y flow-nexus@latest mcp start
 ### Essential Commands
 \`\`\`bash
 # Setup
-npx @claude-flow/cli@latest init --wizard
-npx @claude-flow/cli@latest daemon start
-npx @claude-flow/cli@latest doctor --fix
+npx ruflo@latest init --wizard
+npx ruflo@latest daemon start
+npx ruflo@latest doctor --fix
 
 # Swarm
-npx @claude-flow/cli@latest swarm init --topology hierarchical --max-agents 8
-npx @claude-flow/cli@latest swarm status
+npx ruflo@latest swarm init --topology hierarchical --max-agents 8
+npx ruflo@latest swarm status
 
 # Agents
-npx @claude-flow/cli@latest agent spawn -t coder
-npx @claude-flow/cli@latest agent list
+npx ruflo@latest agent spawn -t coder
+npx ruflo@latest agent list
 
 # Memory
-npx @claude-flow/cli@latest memory search --query "patterns"
+npx ruflo@latest memory search --query "patterns"
 
 # Hooks
-npx @claude-flow/cli@latest hooks pre-task --description "task"
-npx @claude-flow/cli@latest hooks worker dispatch --trigger optimize
+npx ruflo@latest hooks pre-task --description "task"
+npx ruflo@latest hooks worker dispatch --trigger optimize
 \`\`\`
 
 ### File Structure
