@@ -164,6 +164,42 @@ export interface ReviewContext {
   createdAt: string;
   updatedAt: string;
   error?: string;
+  iterationOf?: string; // Previous review ID this iterates on
+}
+
+// ============================================================================
+// PR Comments
+// ============================================================================
+
+export interface PRComment {
+  id: number;
+  body: string;
+  author: string;
+  file?: string;
+  line?: number;
+  side?: 'LEFT' | 'RIGHT';
+  inReplyToId?: number;
+  createdAt: string;
+  updatedAt: string;
+  url: string;
+}
+
+export interface PRCommentThread {
+  rootComment: PRComment;
+  replies: PRComment[];
+  file?: string;
+  line?: number;
+  isResolved: boolean;
+}
+
+// ============================================================================
+// PR Delta (Iterative Review)
+// ============================================================================
+
+export interface PRDelta {
+  newDiff: string;
+  changedSinceReview: string[];
+  unchangedFiles: string[];
 }
 
 // ============================================================================

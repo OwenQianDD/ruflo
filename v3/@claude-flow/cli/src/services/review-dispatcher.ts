@@ -404,6 +404,52 @@ export class ReviewDispatcher extends EventEmitter {
   }
 
   // ==========================================================================
+  // Auto-Comment: Post Findings as PR Comments
+  // ==========================================================================
+
+  /**
+   * Post findings with file+line as inline PR comments.
+   */
+  async postFindingsAsComments(
+    commentService: { postComment(file: string, line: number, body: string): { id: number; url: string } },
+    findings: Finding[],
+    reviewId: string,
+  ): Promise<{ posted: number; skipped: number; errors: string[] }> {
+    let posted = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+
+    for (const f of findings) {
+      if (!f.file || !f.line) {
+        skipped++;
+        continue;
+      }
+
+      const body = [
+        `**[${f.severity}] ${f.title}** (${f.agent})`,
+        '',
+        f.description,
+        '',
+        f.suggestion ? `**Suggested fix:** ${f.suggestion}` : '',
+        '',
+        '---',
+        `_AI Review #${reviewId.slice(0, 8)} via [ruflo](https://github.com/ruvnet/ruflo)_`,
+      ].filter(Boolean).join('\n');
+
+      try {
+        commentService.postComment(f.file, f.line, body);
+        posted++;
+      } catch (error) {
+        errors.push(
+          `${f.file}:${f.line} — ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+
+    return { posted, skipped, errors };
+  }
+
+  // ==========================================================================
   // Cancellation
   // ==========================================================================
 

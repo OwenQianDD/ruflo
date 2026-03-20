@@ -32,9 +32,21 @@ while [[ $# -gt 0 ]]; do
       shift
       exec $RUFLO review chat "$@"
       ;;
+    --comment)
+      shift
+      exec $RUFLO review comment "$@"
+      ;;
     --cleanup)
       shift
       exec $RUFLO review cleanup "$@"
+      ;;
+    --iterate)
+      shift
+      exec $RUFLO review iterate "$@"
+      ;;
+    --auto-comment)
+      ARGS+=(--auto-comment)
+      shift
       ;;
     -h|--help)
       echo "Usage: review-pr.sh [OPTIONS] <PR_URL_OR_SHORTHAND>"
@@ -47,9 +59,12 @@ while [[ $# -gt 0 ]]; do
       echo "  --log-file <path>   Custom log file"
       echo "  --claude-only       Skip Codex agents"
       echo "  --force             Force new review even if one exists"
+      echo "  --iterate <URL>     Re-review: diff against the previous review"
+      echo "  --auto-comment      Post findings as inline PR comments (asks once)"
       echo "  --no-chat           Skip interactive chat after review"
       echo "  --chat <id>         Interactive Q&A by review ID (or most recent)"
       echo "  --chat --dir <path> Interactive Q&A with explicit review directory"
+      echo "  --comment ...       List/post/reply to PR comments"
       echo "  --cleanup [days]    Remove reviews older than N days (default: 21)"
       echo "  -h, --help          Show this help"
       echo ""

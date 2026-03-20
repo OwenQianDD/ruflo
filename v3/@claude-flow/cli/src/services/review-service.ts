@@ -25,6 +25,8 @@ import type {
   ReviewRecommendation,
   PairAgreement,
   ModelProvider,
+  PRDelta,
+  PRCommentThread,
 } from './review-types.js';
 import { DEFAULT_REVIEW_CONFIG } from './review-types.js';
 
@@ -638,6 +640,137 @@ export class ReviewService {
   }
 
   // ==========================================================================
+  // Iterative Review
+  // ==========================================================================
+
+  /**
+   * Fetch the delta between the current PR state and the previous review's snapshot.
+   */
+  fetchPRDelta(pr: PRIdentifier, previousMetadata: PRMetadata, repoPath: string): PRDelta {
+    let newDiff = '';
+    try {
+      newDiff = execFileSync('gh', [
+        'pr', 'diff', String(pr.number),
+        '--repo', `${pr.owner}/${pr.repo}`,
+      ], { encoding: 'utf-8', cwd: repoPath });
+    } catch {
+      // diff may fail for very large PRs
+    }
+
+    // Get current changed files
+    let currentFiles: string[] = [];
+    try {
+      const filesJson = execFileSync('gh', [
+        'pr', 'view', String(pr.number),
+        '--repo', `${pr.owner}/${pr.repo}`,
+        '--json', 'files',
+      ], { encoding: 'utf-8', cwd: repoPath });
+      const parsed = JSON.parse(filesJson);
+      currentFiles = (parsed.files || []).map((f: { path: string }) => f.path);
+    } catch {
+      // Fall back to metadata files
+      currentFiles = previousMetadata.changedFiles.map(f => f.path);
+    }
+
+    const previousFiles = new Set(previousMetadata.changedFiles.map(f => f.path));
+
+    // Files that are new or have a different diff since the last review
+    const changedSinceReview = currentFiles.filter(f => !previousFiles.has(f));
+    const unchangedFiles = currentFiles.filter(f => previousFiles.has(f));
+
+    // If we have both diffs, compare them to find files with actual changes
+    if (newDiff && previousMetadata.diff) {
+      const prevDiffFiles = extractDiffFiles(previousMetadata.diff);
+      const newDiffFiles = extractDiffFiles(newDiff);
+
+      // Files whose diff content has changed
+      for (const file of unchangedFiles) {
+        const prevContent = prevDiffFiles.get(file) || '';
+        const newContent = newDiffFiles.get(file) || '';
+        if (prevContent !== newContent) {
+          changedSinceReview.push(file);
+        }
+      }
+    }
+
+    // Deduplicate
+    const changedSet = [...new Set(changedSinceReview)];
+    const unchangedSet = currentFiles.filter(f => !changedSet.includes(f));
+
+    return {
+      newDiff,
+      changedSinceReview: changedSet,
+      unchangedFiles: unchangedSet,
+    };
+  }
+
+  /**
+   * Build the iteration context string for agent prompts during iterative review.
+   */
+  buildIterationContext(
+    previousReview: ReviewContext,
+    delta: PRDelta,
+    commentThreads: PRCommentThread[],
+  ): string {
+    const prevFindings = previousReview.agentFindings.flatMap(af => af.findings);
+    const severityCounts: Record<string, number> = {};
+    for (const f of prevFindings) {
+      severityCounts[f.severity] = (severityCounts[f.severity] || 0) + 1;
+    }
+
+    const severitySummary = Object.entries(severityCounts)
+      .map(([s, n]) => `${n} ${s}`)
+      .join(', ');
+
+    const parts: string[] = [
+      '## Iteration Context (Re-Review)',
+      '',
+      `This is an iterative review. A previous review (${previousReview.id.slice(0, 8)}) ` +
+      `found ${prevFindings.length} findings (${severitySummary}).`,
+      '',
+    ];
+
+    // File change summary
+    if (delta.changedSinceReview.length > 0) {
+      parts.push(`### Files Changed Since Last Review (${delta.changedSinceReview.length})`);
+      for (const f of delta.changedSinceReview) {
+        parts.push(`  - ${f}`);
+      }
+      parts.push('');
+    }
+
+    if (delta.unchangedFiles.length > 0) {
+      parts.push(`### Files Unchanged Since Last Review (${delta.unchangedFiles.length})`);
+      for (const f of delta.unchangedFiles) {
+        parts.push(`  - ${f}`);
+      }
+      parts.push('');
+    }
+
+    // Comment thread summary
+    if (commentThreads.length > 0) {
+      parts.push(`### PR Comment Threads (${commentThreads.length})`);
+      for (const t of commentThreads) {
+        const loc = t.file ? `${t.file}${t.line ? `:${t.line}` : ''}` : '(general)';
+        const replyCount = t.replies.length;
+        const status = t.isResolved ? 'resolved' : `${replyCount} replies`;
+        parts.push(`  - ${loc}: "${t.rootComment.body.slice(0, 80)}..." (${status})`);
+      }
+      parts.push('');
+    }
+
+    parts.push('### Instructions for Iterative Review');
+    parts.push('Focus on:');
+    parts.push('1. Whether previous findings were addressed in the new changes');
+    parts.push('2. Whether new issues were introduced in changed files');
+    parts.push('3. Whether comment thread discussions resolved concerns');
+    parts.push('4. Only flag findings that are still relevant or newly introduced');
+    parts.push('');
+
+    return parts.join('\n');
+  }
+
+  // ==========================================================================
   // Report Compilation
   // ==========================================================================
 
@@ -892,6 +1025,28 @@ function extractOutermostJson(text: string): string {
 
   // No balanced closing brace found — return from { to end and let JSON.parse fail
   return text.slice(start);
+}
+
+/**
+ * Extract per-file diff content from a unified diff string.
+ * Returns a map of file path → diff hunk content.
+ */
+function extractDiffFiles(diff: string): Map<string, string> {
+  const result = new Map<string, string>();
+  const fileRegex = /^diff --git a\/(.+?) b\/(.+?)$/gm;
+  let match: RegExpExecArray | null;
+  const positions: { file: string; start: number }[] = [];
+
+  while ((match = fileRegex.exec(diff)) !== null) {
+    positions.push({ file: match[2], start: match.index });
+  }
+
+  for (let i = 0; i < positions.length; i++) {
+    const end = i + 1 < positions.length ? positions[i + 1].start : diff.length;
+    result.set(positions[i].file, diff.slice(positions[i].start, end));
+  }
+
+  return result;
 }
 
 function mapFileStatus(status?: string): 'added' | 'modified' | 'deleted' | 'renamed' {
