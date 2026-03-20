@@ -27,6 +27,7 @@ import { parsePRUrl } from '../services/review-types.js';
 import type {
   ReviewStatus,
   PRIdentifier,
+  PRCommentThread,
   AgentRole,
   DispatchConfig,
   ModelProvider,
@@ -154,6 +155,38 @@ function launchChat(contextFile: string, reviewDir: string, model: string, revie
 }
 
 /**
+ * Build a context section summarizing existing PR comment threads
+ * so review agents are aware of prior discussion.
+ */
+function buildCommentContext(threads: PRCommentThread[]): string {
+  const parts: string[] = [
+    '## Existing PR Discussion',
+    '',
+    `There are ${threads.length} comment threads on this PR.`,
+    'Consider these when reviewing — some issues may already be discussed or resolved.',
+    '',
+  ];
+
+  for (const t of threads) {
+    const loc = t.file ? `${t.file}${t.line ? `:${t.line}` : ''}` : '(general)';
+    parts.push(`### ${loc} — ${t.rootComment.author}`);
+    parts.push(t.rootComment.body.slice(0, 300));
+    if (t.replies.length > 0) {
+      parts.push(`  ${t.replies.length} repl${t.replies.length === 1 ? 'y' : 'ies'}:`);
+      for (const r of t.replies.slice(0, 3)) {
+        parts.push(`  > ${r.author}: ${r.body.slice(0, 150)}`);
+      }
+      if (t.replies.length > 3) {
+        parts.push(`  > ... and ${t.replies.length - 3} more`);
+      }
+    }
+    parts.push('');
+  }
+
+  return parts.join('\n');
+}
+
+/**
  * Find the most recent review directory under ~/.claude/reviews/
  */
 function findLatestReviewDir(): string | null {
@@ -253,20 +286,29 @@ async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> 
   const review = service.createReview(pr, metadata, worktreePath);
   output.writeln(`  Review ID: ${review.id}`);
 
+  // Step 4a: Fetch existing PR comments for agent context
+  output.writeln('  Fetching PR comments...');
+  const commentService = createPRCommentService(pr);
+  const commentThreads = commentService.getCommentThreads();
+  let commentContext = '';
+  if (commentThreads.length > 0) {
+    output.writeln(`  ${commentThreads.length} comment threads found`);
+    commentContext = buildCommentContext(commentThreads);
+  } else {
+    output.writeln(output.dim('  No existing comments'));
+  }
+
   // Step 4b: Build iteration context (if iterating)
   let iterationContext = '';
   if (previousReview) {
     output.writeln('  Computing delta against previous review...');
-    const commentService = createPRCommentService(pr);
     const delta = service.fetchPRDelta(pr, previousReview.metadata, repoPath);
-    const commentThreads = commentService.getCommentThreads();
     iterationContext = service.buildIterationContext(previousReview, delta, commentThreads);
     review.iterationOf = previousReview.id;
     service.saveReview(review);
 
     output.writeln(`  Files changed since last review: ${delta.changedSinceReview.length}`);
     output.writeln(`  Files unchanged: ${delta.unchangedFiles.length}`);
-    output.writeln(`  Comment threads: ${commentThreads.length}`);
   }
 
   output.writeln();
@@ -297,16 +339,19 @@ async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> 
   ));
   const promptFiles = new Map<string, string>();
 
+  // Build extra context to append to all agent prompts
+  const extraContext = [commentContext, iterationContext].filter(Boolean).join('\n\n');
+
   for (const role of roles) {
     let claudePrompt = service.buildAgentPromptForProvider(role, review, 'claude', hasCodebaseAccess);
-    if (iterationContext) claudePrompt += '\n\n' + iterationContext;
+    if (extraContext) claudePrompt += '\n\n' + extraContext;
     const claudeFile = path.join(tmpDir, `prompt-${role}-claude.txt`);
     fs.writeFileSync(claudeFile, claudePrompt);
     promptFiles.set(`${role}-claude`, claudeFile);
 
     if (dualMode) {
       let codexPrompt = service.buildAgentPromptForProvider(role, review, 'codex', hasCodebaseAccess);
-      if (iterationContext) codexPrompt += '\n\n' + iterationContext;
+      if (extraContext) codexPrompt += '\n\n' + extraContext;
       const codexFile = path.join(tmpDir, `prompt-${role}-codex.txt`);
       fs.writeFileSync(codexFile, codexPrompt);
       promptFiles.set(`${role}-codex`, codexFile);
