@@ -208,11 +208,35 @@ export class ReviewService {
   }
 
   getReview(id: string): ReviewContext | null {
+    // Exact match first
     const filePath = path.join(this.reviewsDir, `${id}.json`);
-    if (!fs.existsSync(filePath)) return null;
+    if (fs.existsSync(filePath)) {
+      try {
+        return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as ReviewContext;
+      } catch {
+        return null;
+      }
+    }
+
+    // Short prefix match — find all review files matching the prefix
+    if (!fs.existsSync(this.reviewsDir)) return null;
+    const matches = fs.readdirSync(this.reviewsDir)
+      .filter(f => f.endsWith('.json') && f !== 'config.json' && f.startsWith(id));
+
+    if (matches.length === 0) return null;
+    if (matches.length > 1) {
+      const matchIds = matches.map(f => f.replace('.json', ''));
+      throw new Error(
+        `Ambiguous review ID "${id}" matches ${matches.length} reviews. ` +
+        `Use a longer prefix or the full ID:\n` +
+        matchIds.map(m => `  ${m}`).join('\n')
+      );
+    }
 
     try {
-      return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as ReviewContext;
+      return JSON.parse(
+        fs.readFileSync(path.join(this.reviewsDir, matches[0]), 'utf-8')
+      ) as ReviewContext;
     } catch {
       return null;
     }
