@@ -184,9 +184,12 @@ export class PRCommentService {
   // ==========================================================================
 
   /**
-   * Group comments into threads by their in_reply_to_id.
+   * Group comments into threads with resolution status from GraphQL.
    */
   getCommentThreads(): PRCommentThread[] {
+    // Fetch thread resolution status via GraphQL
+    const threadResolution = this.fetchThreadResolution();
+
     const comments = this.listComments();
     const rootComments = comments.filter(c => !c.inReplyToId && c.file);
     const replyMap = new Map<number, PRComment[]>();
@@ -199,18 +202,107 @@ export class PRCommentService {
       }
     }
 
-    return rootComments.map(root => ({
-      rootComment: root,
-      replies: replyMap.get(root.id) || [],
-      file: root.file,
-      line: root.line,
-      isResolved: false, // GitHub API doesn't expose resolution directly on comments
-    }));
+    return rootComments.map(root => {
+      // Match REST comment to GraphQL thread by file+line
+      const threadInfo = threadResolution.find(
+        t => t.path === root.file && t.line === root.line
+      );
+      return {
+        rootComment: root,
+        replies: replyMap.get(root.id) || [],
+        file: root.file,
+        line: root.line,
+        isResolved: threadInfo?.isResolved ?? false,
+        threadId: threadInfo?.threadId,
+      };
+    });
+  }
+
+  // ==========================================================================
+  // Resolve / Unresolve Thread
+  // ==========================================================================
+
+  /**
+   * Resolve a review thread by its GraphQL node ID.
+   * Use getCommentThreads() to find the threadId.
+   */
+  resolveThread(threadId: string): boolean {
+    const mutation = `mutation { resolveReviewThread(input: {threadId: "${threadId}"}) { thread { isResolved } } }`;
+    try {
+      const result = execFileSync('gh', [
+        'api', 'graphql', '-f', `query=${mutation}`,
+      ], { encoding: 'utf-8' });
+      const parsed = JSON.parse(result);
+      return parsed.data?.resolveReviewThread?.thread?.isResolved ?? false;
+    } catch (error) {
+      throw new Error(
+        `Failed to resolve thread: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  /**
+   * Unresolve a previously resolved review thread.
+   */
+  unresolveThread(threadId: string): boolean {
+    const mutation = `mutation { unresolveReviewThread(input: {threadId: "${threadId}"}) { thread { isResolved } } }`;
+    try {
+      const result = execFileSync('gh', [
+        'api', 'graphql', '-f', `query=${mutation}`,
+      ], { encoding: 'utf-8' });
+      const parsed = JSON.parse(result);
+      return !(parsed.data?.unresolveReviewThread?.thread?.isResolved ?? true);
+    } catch (error) {
+      throw new Error(
+        `Failed to unresolve thread: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 
   // ==========================================================================
   // Private Helpers
   // ==========================================================================
+
+  /**
+   * Fetch review thread node IDs and resolution status via GraphQL.
+   */
+  private fetchThreadResolution(): { threadId: string; path: string; line: number; isResolved: boolean }[] {
+    const query = `query($owner: String!, $repo: String!, $number: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 100) {
+            nodes {
+              id
+              isResolved
+              line
+              path
+            }
+          }
+        }
+      }
+    }`;
+
+    try {
+      const result = execFileSync('gh', [
+        'api', 'graphql',
+        '-f', `query=${query}`,
+        '-F', `owner=${this.pr.owner}`,
+        '-F', `repo=${this.pr.repo}`,
+        '-F', `number=${this.pr.number}`,
+      ], { encoding: 'utf-8' });
+
+      const parsed = JSON.parse(result);
+      const threads = parsed.data?.repository?.pullRequest?.reviewThreads?.nodes || [];
+      return threads.map((t: { id: string; isResolved: boolean; line: number; path: string }) => ({
+        threadId: t.id,
+        path: t.path || '',
+        line: t.line || 0,
+        isResolved: t.isResolved || false,
+      }));
+    } catch {
+      return [];
+    }
+  }
 
   private getChangedFiles(): string[] {
     if (this.changedFilesCache) return this.changedFilesCache;

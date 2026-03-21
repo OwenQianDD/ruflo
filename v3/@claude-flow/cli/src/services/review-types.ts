@@ -190,6 +190,7 @@ export interface PRCommentThread {
   file?: string;
   line?: number;
   isResolved: boolean;
+  threadId?: string; // GraphQL node ID, needed for resolve/unresolve
 }
 
 // ============================================================================

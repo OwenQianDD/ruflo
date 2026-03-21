@@ -1111,18 +1111,145 @@ const commentReplyCommand: Command = {
   },
 };
 
+const commentResolveCommand: Command = {
+  name: 'resolve',
+  description: 'Resolve or unresolve a review thread',
+  options: [
+    { name: 'file', short: 'f', type: 'string', description: 'File path to identify the thread' },
+    { name: 'line', short: 'l', type: 'string', description: 'Line number to identify the thread' },
+    { name: 'thread-id', short: 't', type: 'string', description: 'GraphQL thread ID (from comment list --json)' },
+    { name: 'undo', type: 'boolean', default: false, description: 'Unresolve instead of resolve' },
+    { name: 'all', type: 'boolean', default: false, description: 'Resolve all unresolved threads' },
+  ],
+  action: async (ctx: CommandContext): Promise<CommandResult> => {
+    const reviewId = ctx.args[0] as string | undefined;
+    if (!reviewId) {
+      output.printError('Usage: ruflo review comment resolve <review-id> --file <path> --line <num>');
+      return { success: false, exitCode: 1 };
+    }
+
+    const service = createReviewService(ctx.cwd);
+    await service.initialize();
+    const review = service.getReview(reviewId);
+    if (!review) {
+      output.printError(`Review not found: ${reviewId}`);
+      return { success: false, exitCode: 1 };
+    }
+
+    const commentService = createPRCommentService(review.pr);
+    const undo = !!ctx.flags.undo;
+    const resolveAll = !!ctx.flags.all;
+
+    // Direct thread ID
+    const directThreadId = ctx.flags['thread-id'] as string | undefined;
+    if (directThreadId) {
+      try {
+        const success = undo
+          ? commentService.unresolveThread(directThreadId)
+          : commentService.resolveThread(directThreadId);
+        if (success) {
+          output.printSuccess(`Thread ${undo ? 'unresolved' : 'resolved'}: ${directThreadId}`);
+        } else {
+          output.printError(`Failed to ${undo ? 'unresolve' : 'resolve'} thread`);
+        }
+        return { success: true };
+      } catch (error) {
+        output.printError(error instanceof Error ? error.message : String(error));
+        return { success: false, exitCode: 1 };
+      }
+    }
+
+    // Resolve all unresolved threads
+    if (resolveAll) {
+      const threads = commentService.getCommentThreads();
+      const targets = undo
+        ? threads.filter(t => t.isResolved && t.threadId)
+        : threads.filter(t => !t.isResolved && t.threadId);
+
+      if (targets.length === 0) {
+        output.printInfo(`No ${undo ? 'resolved' : 'unresolved'} threads to ${undo ? 'unresolve' : 'resolve'}.`);
+        return { success: true };
+      }
+
+      let succeeded = 0;
+      for (const t of targets) {
+        try {
+          const ok = undo
+            ? commentService.unresolveThread(t.threadId!)
+            : commentService.resolveThread(t.threadId!);
+          if (ok) {
+            succeeded++;
+            const loc = `${t.file || '?'}${t.line ? `:${t.line}` : ''}`;
+            output.writeln(`  ${undo ? 'Unresolved' : 'Resolved'}: ${loc}`);
+          }
+        } catch {
+          const loc = `${t.file || '?'}${t.line ? `:${t.line}` : ''}`;
+          output.writeln(output.dim(`  Failed: ${loc}`));
+        }
+      }
+      output.writeln();
+      output.writeln(`  ${succeeded}/${targets.length} threads ${undo ? 'unresolved' : 'resolved'}`);
+      return { success: true, data: { succeeded, total: targets.length } };
+    }
+
+    // Resolve by file+line
+    const file = ctx.flags.file as string | undefined;
+    const lineStr = ctx.flags.line as string | undefined;
+
+    if (!file) {
+      output.printError('Specify --file and --line, --thread-id, or --all');
+      return { success: false, exitCode: 1 };
+    }
+
+    const threads = commentService.getCommentThreads();
+    const lineNum = lineStr ? parseInt(lineStr, 10) : undefined;
+    const matching = threads.filter(t =>
+      t.file === file &&
+      (lineNum === undefined || t.line === lineNum) &&
+      t.threadId
+    );
+
+    if (matching.length === 0) {
+      output.printError(`No review thread found at ${file}${lineNum ? `:${lineNum}` : ''}`);
+      return { success: false, exitCode: 1 };
+    }
+
+    let succeeded = 0;
+    for (const t of matching) {
+      try {
+        const ok = undo
+          ? commentService.unresolveThread(t.threadId!)
+          : commentService.resolveThread(t.threadId!);
+        if (ok) {
+          succeeded++;
+          output.printSuccess(`Thread ${undo ? 'unresolved' : 'resolved'}: ${t.file}:${t.line}`);
+        }
+      } catch (error) {
+        output.printError(
+          `${t.file}:${t.line} — ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+
+    return { success: true, data: { succeeded, total: matching.length } };
+  },
+};
+
 const commentCommand: Command = {
   name: 'comment',
-  description: 'Interact with PR comments (list, post, reply)',
-  subcommands: [commentListCommand, commentPostCommand, commentReplyCommand],
+  description: 'Interact with PR comments (list, post, reply, resolve)',
+  subcommands: [commentListCommand, commentPostCommand, commentReplyCommand, commentResolveCommand],
   action: async (): Promise<CommandResult> => {
     output.writeln();
     output.writeln(output.bold('PR Comment Commands'));
     output.writeln();
     output.printList([
-      'list  <review-id>             List all comments on the PR',
-      'post  <review-id> --file --line --body  Post an inline comment',
-      'reply <review-id> --comment-id --body   Reply to a comment',
+      'list    <review-id>                          List all comments on the PR',
+      'post    <review-id> --file --line --body      Post an inline comment',
+      'reply   <review-id> --comment-id --body       Reply to a comment',
+      'resolve <review-id> --file --line             Resolve a review thread',
+      'resolve <review-id> --all                     Resolve all threads',
+      'resolve <review-id> --file --line --undo      Unresolve a thread',
     ]);
     output.writeln();
     return { success: true };
