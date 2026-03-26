@@ -146,22 +146,24 @@ function launchChat(contextFile: string, reviewDir: string, model: string, revie
   const systemPrompt = buildChatSystemPrompt(contextFile, reviewDir, reviewId);
   const codexCmd = process.env.CODEX_CMD || 'codex';
 
-  // Try codex first
+  // Try codex first — pass context as the initial prompt and add the review dir
   try {
     execFileSync('which', [codexCmd], { stdio: 'ignore' });
+    const initialPrompt = `${systemPrompt}\n\nRead ${contextFile} now, then say "Ready — ask me anything about the review."`;
     execFileSync(codexCmd, [
       '-m', model,
-      '--full-context',
-      systemPrompt,
-    ], { stdio: 'inherit', cwd: reviewDir });
+      '--add-dir', reviewDir,
+      initialPrompt,
+    ], { stdio: 'inherit' });
     return;
   } catch {
     // codex not available or exited — fall back to claude
   }
 
   try {
+    const claudeModel = model === DEFAULT_DISPATCH_CONFIG.codexModel ? 'opus' : model;
     execFileSync('claude', [
-      '--model', model === DEFAULT_DISPATCH_CONFIG.codexModel ? 'opus' : model,
+      '--model', claudeModel,
       '--append-system-prompt', systemPrompt,
     ], { stdio: 'inherit' });
   } catch {
