@@ -842,7 +842,7 @@ const reportCommand: Command = {
   name: 'report',
   description: 'Display review report',
   options: [
-    { name: 'format', short: 'f', type: 'string', description: 'Output format', choices: ['markdown', 'json'], default: 'markdown' },
+    // Note: --format is a global flag (text/json/table). We use json for JSON, anything else for markdown.
     { name: 'output', short: 'o', type: 'string', description: 'Write to file' },
   ],
   action: async (ctx: CommandContext): Promise<CommandResult> => {
@@ -861,8 +861,30 @@ const reportCommand: Command = {
       return { success: false, exitCode: 1 };
     }
 
-    if (!review.report) {
-      output.printError('Report not yet compiled. Review may still be in progress.');
+    // The report may not be stored on the review context if queen reconciliation
+    // produced the markdown directly. Fall back to the artifact directory's report.md.
+    let reportMarkdown = review.report?.markdown;
+    if (!reportMarkdown) {
+      const prefix = `${review.pr.owner}-${review.pr.repo}-${review.pr.number}`;
+      const base = path.join(
+        process.env.HOME || process.env.USERPROFILE || '.',
+        '.claude', 'reviews',
+      );
+      if (fs.existsSync(base)) {
+        const dirs = fs.readdirSync(base, { withFileTypes: true })
+          .filter(d => d.isDirectory() && d.name.startsWith(prefix))
+          .map(d => path.join(base, d.name))
+          .filter(d => fs.existsSync(path.join(d, 'report.md')))
+          .sort()
+          .reverse();
+        if (dirs.length > 0) {
+          reportMarkdown = fs.readFileSync(path.join(dirs[0], 'report.md'), 'utf-8');
+        }
+      }
+    }
+
+    if (!reportMarkdown) {
+      output.printError('Report not found. Review may still be in progress.');
       output.printInfo(`Status: ${formatStatus(review.status)}`);
       return { success: false, exitCode: 1 };
     }
@@ -871,23 +893,34 @@ const reportCommand: Command = {
     const outputPath = ctx.flags.output as string | undefined;
 
     if (format === 'json') {
-      const json = JSON.stringify(review.report, null, 2);
-      if (outputPath) {
-        fs.writeFileSync(outputPath, json);
-        output.printSuccess(`Report written to ${outputPath}`);
+      if (review.report) {
+        const json = JSON.stringify(review.report, null, 2);
+        if (outputPath) {
+          fs.writeFileSync(outputPath, json);
+          output.printSuccess(`Report written to ${outputPath}`);
+        } else {
+          output.printJson(review.report);
+        }
       } else {
-        output.printJson(review.report);
+        // No structured report object, output what we have
+        const fallback = { markdown: reportMarkdown, generatedAt: review.updatedAt };
+        if (outputPath) {
+          fs.writeFileSync(outputPath, JSON.stringify(fallback, null, 2));
+          output.printSuccess(`Report written to ${outputPath}`);
+        } else {
+          output.printJson(fallback);
+        }
       }
     } else {
       if (outputPath) {
-        fs.writeFileSync(outputPath, review.report.markdown);
+        fs.writeFileSync(outputPath, reportMarkdown);
         output.printSuccess(`Report written to ${outputPath}`);
       } else {
-        output.writeln(review.report.markdown);
+        output.writeln(reportMarkdown);
       }
     }
 
-    return { success: true, data: review.report };
+    return { success: true, data: review.report || { markdown: reportMarkdown } };
   },
 };
 
