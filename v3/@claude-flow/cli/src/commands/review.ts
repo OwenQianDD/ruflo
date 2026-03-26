@@ -139,14 +139,29 @@ function promptYesNo(question: string): Promise<boolean> {
 }
 
 /**
- * Launch interactive claude with review context.
- * Uses a short system prompt pointing to the context file on disk.
+ * Launch interactive chat with review context.
+ * Uses codex by default. Falls back to claude if codex is unavailable.
  */
 function launchChat(contextFile: string, reviewDir: string, model: string, reviewId?: string): void {
   const systemPrompt = buildChatSystemPrompt(contextFile, reviewDir, reviewId);
+  const codexCmd = process.env.CODEX_CMD || 'codex';
+
+  // Try codex first
+  try {
+    execFileSync('which', [codexCmd], { stdio: 'ignore' });
+    execFileSync(codexCmd, [
+      '-m', model,
+      '--full-context',
+      systemPrompt,
+    ], { stdio: 'inherit', cwd: reviewDir });
+    return;
+  } catch {
+    // codex not available or exited — fall back to claude
+  }
+
   try {
     execFileSync('claude', [
-      '--model', model,
+      '--model', model === DEFAULT_DISPATCH_CONFIG.codexModel ? 'opus' : model,
       '--append-system-prompt', systemPrompt,
     ], { stdio: 'inherit' });
   } catch {
@@ -557,7 +572,7 @@ async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> 
   if (!noChat) {
     const contextFile = path.join(reviewDir, 'context.md');
     if (fs.existsSync(contextFile)) {
-      const chatModelResolved = claudeModel || DEFAULT_DISPATCH_CONFIG.claudeModel;
+      const chatModelResolved = claudeModel || DEFAULT_DISPATCH_CONFIG.codexModel;
       output.writeln('Entering chat mode — ask follow-up questions about the review.');
       output.writeln(output.dim('(Ctrl+C to exit)'));
       output.writeln();
@@ -690,7 +705,7 @@ const initCommand: Command = {
           // Only launch chat if --chat flag is set
           if (ctx.flags['chat']) {
             const contextFile = path.join(artifactDir, 'context.md');
-            const chatModel = (ctx.flags['claude-model'] as string) || DEFAULT_DISPATCH_CONFIG.claudeModel;
+            const chatModel = (ctx.flags['codex-model'] as string) || DEFAULT_DISPATCH_CONFIG.codexModel;
             output.writeln('Entering chat mode — ask follow-up questions about the review.');
             output.writeln(output.dim('(Ctrl+C to exit)'));
             output.writeln();
@@ -933,15 +948,15 @@ const reportCommand: Command = {
 
 const chatCommand: Command = {
   name: 'chat',
-  description: 'Post-review interactive Q&A (launches claude with review context)',
+  description: 'Post-review interactive Q&A (launches codex with review context)',
   options: [
     { name: 'dir', short: 'd', type: 'string', description: 'Explicit review directory path' },
-    { name: 'model', short: 'm', type: 'string', description: 'Claude model for chat (default: opus)' },
+    { name: 'model', short: 'm', type: 'string', description: 'Chat model (default: gpt-5.4, env: CODEX_MODEL)' },
   ],
   action: async (ctx: CommandContext): Promise<CommandResult> => {
     const id = ctx.args[0] as string | undefined;
     const explicitDir = ctx.flags.dir as string | undefined;
-    const model = (ctx.flags.model as string) || 'opus';
+    const model = (ctx.flags.model as string) || DEFAULT_DISPATCH_CONFIG.codexModel;
 
     let reviewDir: string | null = null;
 
