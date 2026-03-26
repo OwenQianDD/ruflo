@@ -105,14 +105,81 @@ function buildDispatchConfig(ctx: CommandContext): Partial<DispatchConfig> {
  * braces, or other shell-special characters, and can exceed OS argument size limits.
  */
 function buildChatSystemPrompt(contextFile: string, reviewDir: string, reviewId?: string): string {
-  const commentSection = reviewId ? [
-    ``,
-    `You can interact with PR comments using these commands via Bash:`,
-    `  ruflo review comment list ${reviewId}`,
-    `  ruflo review comment post ${reviewId} --file <path> --line <num> --body "text"`,
-    `  ruflo review comment reply ${reviewId} --comment-id <num> --body "text"`,
-    `Only use these when the user explicitly asks to post or reply to comments.`,
-  ].join('\n') : '';
+  const rid = reviewId || '<review-id>';
+  const repo = reviewDir; // reviewDir path contains owner-repo info for context
+
+  const commentSection = !reviewId ? '' : `
+
+## PR Comment Commands
+
+Use these ruflo commands to interact with PR comments. Do NOT use raw \`gh api\` — these commands handle auth, validation, and guardrails.
+
+### List comments
+\`\`\`bash
+ruflo review comment list ${rid}
+ruflo review comment list ${rid} --format json   # machine-readable
+\`\`\`
+
+### Post an inline comment
+\`\`\`bash
+ruflo review comment post ${rid} --file <path> --line <num> --body '<text>'
+\`\`\`
+
+### Reply to a comment
+\`\`\`bash
+ruflo review comment reply ${rid} --comment-id <num> --body '<text>'
+\`\`\`
+
+### Resolve / unresolve a thread
+\`\`\`bash
+ruflo review comment resolve ${rid} --file <path> --line <num>
+ruflo review comment resolve ${rid} --all
+ruflo review comment resolve ${rid} --file <path> --line <num> --undo
+\`\`\`
+
+## CRITICAL: Getting the correct line number
+
+GitHub inline comments require a line number from the DIFF, not the file. Before posting, you MUST look up valid diff positions. Run this to get the changed hunks for a file:
+
+\`\`\`bash
+gh pr diff <PR_NUMBER> | grep -A5 "^+++ b/<filepath>"
+\`\`\`
+
+Or to see all changed line ranges for a specific file:
+
+\`\`\`bash
+gh api repos/{owner}/{repo}/pulls/{number}/files --paginate \\
+  --jq '.[] | select(.filename=="<filepath>") | .patch'
+\`\`\`
+
+The line number in --line must be a line that appears in the diff (an added or modified line). If GitHub rejects your comment with "Validation Failed" or a 422 error, it means the line number is not a valid diff position. Pick a line from the actual diff hunk output.
+
+## Shell quoting
+
+Always use single quotes for --body to avoid shell interpolation issues with backticks, $variables, and special characters:
+
+\`\`\`bash
+# GOOD — single quotes
+ruflo review comment post ${rid} --file src/main.go --line 42 --body 'Use \`ctx.Err()\` instead of checking \`ctx.Done()\` channel'
+
+# BAD — double quotes will break on backticks
+ruflo review comment post ${rid} --file src/main.go --line 42 --body "Use \`ctx.Err()\`..."
+\`\`\`
+
+For multi-line comments, use a heredoc:
+
+\`\`\`bash
+ruflo review comment post ${rid} --file src/main.go --line 42 --body "$(cat <<'COMMENT'
+This function has two issues:
+
+1. Missing error check on line 45
+2. The retry loop doesn't respect context cancellation
+
+Suggested fix: wrap the loop body with a select on ctx.Done()
+COMMENT
+)"
+\`\`\`
+`;
 
   return [
     `You are the Queen Reviewer in post-review chat mode.`,
