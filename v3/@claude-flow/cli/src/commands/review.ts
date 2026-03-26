@@ -549,18 +549,17 @@ async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> 
   // Cleanup temp dir
   try { fs.rmSync(tmpDir, { recursive: true }); } catch { /* best effort */ }
 
-  // Step 15: Launch interactive chat (default) or print instructions
-  if (noChat) {
-    output.writeln('To chat about this review:');
-    output.writeln(output.dim(`  ruflo review chat ${review.id}`));
-    output.writeln(output.dim('  ./scripts/review-pr.sh --chat'));
-    output.writeln();
-  } else {
+  // Step 15: Print chat instructions, or launch chat if --chat
+  output.writeln('To chat about this review:');
+  output.writeln(output.dim(`  ruflo review chat ${review.id}`));
+  output.writeln();
+
+  if (!noChat) {
     const contextFile = path.join(reviewDir, 'context.md');
     if (fs.existsSync(contextFile)) {
       const chatModelResolved = claudeModel || DEFAULT_DISPATCH_CONFIG.claudeModel;
       output.writeln('Entering chat mode — ask follow-up questions about the review.');
-      output.writeln(output.dim('(Use --no-chat to skip this, or Ctrl+C to exit)'));
+      output.writeln(output.dim('(Ctrl+C to exit)'));
       output.writeln();
       launchChat(contextFile, reviewDir, chatModelResolved, review.id);
     }
@@ -598,7 +597,7 @@ const sharedPipelineOptions = [
   { name: 'agent-budget', type: 'string' as const, description: 'Max USD per agent (default: 25, env: AGENT_BUDGET)' },
   { name: 'reconcile-budget', type: 'string' as const, description: 'Max USD for queen reconciliation (default: 50, env: RECONCILE_BUDGET)' },
   { name: 'claude-only', type: 'boolean' as const, default: false, description: 'Skip Codex agents (Claude-only mode)' },
-  { name: 'no-chat', type: 'boolean' as const, default: false, description: 'Skip interactive chat after review completes' },
+  { name: 'chat', type: 'boolean' as const, default: false, description: 'Launch interactive chat after review completes' },
   { name: 'auto-comment', type: 'boolean' as const, default: false, description: 'Post findings as inline PR comments (asks approval once)' },
 ];
 
@@ -612,7 +611,7 @@ function buildPipelineOptions(ctx: CommandContext, pr: PRIdentifier): Omit<Pipel
     skipWorktree: !!ctx.flags['skip-worktree'],
     skipDebate: !!ctx.flags['skip-debate'],
     claudeOnly: !!ctx.flags['claude-only'],
-    noChat: !!ctx.flags['no-chat'],
+    noChat: !ctx.flags['chat'],
     autoComment: !!ctx.flags['auto-comment'],
     claudeModel: ctx.flags['claude-model'] as string | undefined,
   };
@@ -676,19 +675,27 @@ const initCommand: Command = {
         output.writeln(output.dim('  Use --force to run a fresh review, or `ruflo review iterate` to re-review.'));
         output.writeln();
 
-        // Jump to chat if artifacts exist
-        if (artifactDir && !ctx.flags['no-chat']) {
-          const contextFile = path.join(artifactDir, 'context.md');
+        // Display report if artifacts exist
+        if (artifactDir) {
           const reportFile = path.join(artifactDir, 'report.md');
           if (fs.existsSync(reportFile)) {
             output.writeln(fs.readFileSync(reportFile, 'utf-8'));
             output.writeln();
           }
-          const chatModel = (ctx.flags['claude-model'] as string) || DEFAULT_DISPATCH_CONFIG.claudeModel;
-          output.writeln('Entering chat mode — ask follow-up questions about the review.');
-          output.writeln(output.dim('(Use --no-chat to skip this, or Ctrl+C to exit)'));
+
+          output.writeln('To chat about this review:');
+          output.writeln(output.dim(`  ruflo review chat ${existing.id}`));
           output.writeln();
-          launchChat(contextFile, artifactDir, chatModel, existing.id);
+
+          // Only launch chat if --chat flag is set
+          if (ctx.flags['chat']) {
+            const contextFile = path.join(artifactDir, 'context.md');
+            const chatModel = (ctx.flags['claude-model'] as string) || DEFAULT_DISPATCH_CONFIG.claudeModel;
+            output.writeln('Entering chat mode — ask follow-up questions about the review.');
+            output.writeln(output.dim('(Ctrl+C to exit)'));
+            output.writeln();
+            launchChat(contextFile, artifactDir, chatModel, existing.id);
+          }
         }
 
         return {
