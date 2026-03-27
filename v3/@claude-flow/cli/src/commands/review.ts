@@ -597,28 +597,24 @@ async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> 
   output.writeln(reportMarkdown);
   output.writeln();
 
-  // Step 13b: Auto-comment
+  // Step 13b: Auto-comment — user opted in with --auto-comment, no prompt needed
   if (autoComment) {
     const allFindings: Finding[] = review.agentFindings.flatMap(af => af.findings);
     const commentable = allFindings.filter(f => f.file && f.line);
+    output.writeln(output.dim(`  Auto-comment: ${allFindings.length} total findings, ${commentable.length} with file+line`));
     if (commentable.length > 0) {
-      output.writeln(`  ${commentable.length} findings have file+line references:`);
+      output.writeln(`  Posting ${commentable.length} findings as PR comments...`);
       for (const f of commentable) {
         output.writeln(`    [${f.severity}] ${f.file}:${f.line} — ${f.title.slice(0, 80)}`);
       }
       output.writeln();
-      const approved = await promptYesNo(`Post ${commentable.length} comments to the PR?`);
-      if (approved) {
-        const commentService = createPRCommentService(pr);
-        const result = await dispatcher.postFindingsAsComments(commentService, commentable, review.id);
-        output.writeln(`  Posted ${result.posted} comments, ${result.skipped} skipped, ${result.errors.length} errors`);
-        if (result.errors.length > 0) {
-          for (const err of result.errors) {
-            output.writeln(output.dim(`    Error: ${err}`));
-          }
+      const commentService = createPRCommentService(pr);
+      const result = await dispatcher.postFindingsAsComments(commentService, commentable, review.id);
+      output.writeln(`  Posted ${result.posted} comments, ${result.skipped} skipped, ${result.errors.length} errors`);
+      if (result.errors.length > 0) {
+        for (const err of result.errors) {
+          output.writeln(output.dim(`    Error: ${err}`));
         }
-      } else {
-        output.writeln(output.dim('  Skipped posting comments.'));
       }
       output.writeln();
     }
