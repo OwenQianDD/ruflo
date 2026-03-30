@@ -299,10 +299,13 @@ export class ReviewService {
     const all = this.listReviews();
     const removed: { id: string; pr: string; updatedAt: string }[] = [];
 
-    const artifactsBase = path.join(
-      process.env.HOME || process.env.USERPROFILE || '.',
-      '.claude', 'reviews',
-    );
+    const artifactBases = [
+      this.reviewsDir,
+      path.join(
+        process.env.HOME || process.env.USERPROFILE || '.',
+        '.claude', 'reviews',
+      ),
+    ].filter((base, index, bases) => bases.indexOf(base) === index);
 
     for (const review of all) {
       const updated = new Date(review.updatedAt).getTime();
@@ -312,9 +315,11 @@ export class ReviewService {
       const stateFile = path.join(this.reviewsDir, `${review.id}.json`);
       try { fs.unlinkSync(stateFile); } catch { /* already gone */ }
 
-      // Remove matching artifact directories
-      if (fs.existsSync(artifactsBase)) {
-        const prefix = `${review.pr.owner}-${review.pr.repo}-${review.pr.number}`;
+      // Remove matching artifact directories from the project-local store first,
+      // with a fallback sweep for legacy artifacts under ~/.claude/reviews.
+      const prefix = `${review.pr.owner}-${review.pr.repo}-${review.pr.number}`;
+      for (const artifactsBase of artifactBases) {
+        if (!fs.existsSync(artifactsBase)) continue;
         const dirs = fs.readdirSync(artifactsBase, { withFileTypes: true })
           .filter(d => d.isDirectory() && d.name.startsWith(prefix));
         for (const dir of dirs) {
@@ -901,8 +906,8 @@ export class ReviewService {
   // ==========================================================================
 
   /**
-   * Persist review artifacts to ~/.claude/reviews/<owner>-<repo>-<pr>-<timestamp>/
-   * Returns the review directory path.
+   * Persist review artifacts to <project>/.claude/reviews/<owner>-<repo>-<pr>-<timestamp>/
+   * so Codex can open them inside the active workspace sandbox.
    */
   persistArtifacts(
     review: ReviewContext,
@@ -911,10 +916,7 @@ export class ReviewService {
   ): string {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const dirName = `${review.pr.owner}-${review.pr.repo}-${review.pr.number}-${timestamp}`;
-    const reviewDir = path.join(
-      process.env.HOME || process.env.USERPROFILE || '.',
-      '.claude', 'reviews', dirName,
-    );
+    const reviewDir = path.join(this.reviewsDir, dirName);
     fs.mkdirSync(reviewDir, { recursive: true });
 
     // Save agent outputs

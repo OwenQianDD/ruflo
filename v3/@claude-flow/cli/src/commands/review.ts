@@ -10,7 +10,7 @@
  * - review status    Check review progress
  * - review list      List all reviews
  * - review report    Display review report
- * - review chat      Post-review Q&A (launches interactive claude)
+ * - review chat      Post-review Q&A (launches interactive codex, falls back to claude)
  * - review comment   List, post, and reply to PR comments
  */
 
@@ -270,20 +270,23 @@ function buildCommentContext(threads: PRCommentThread[]): string {
   return parts.join('\n');
 }
 
-/**
- * Find the most recent review directory under ~/.claude/reviews/
- */
-function findLatestReviewDir(): string | null {
-  const base = path.join(
+function getReviewArtifactBases(cwd: string): string[] {
+  const bases = [path.join(cwd, '.claude', 'reviews')];
+  const legacyBase = path.join(
     process.env.HOME || process.env.USERPROFILE || '.',
     '.claude', 'reviews',
   );
-  if (!fs.existsSync(base)) return null;
+  if (!bases.includes(legacyBase)) bases.push(legacyBase);
+  return bases;
+}
 
-  const entries = fs.readdirSync(base, { withFileTypes: true })
-    .filter(d => d.isDirectory())
-    .map(d => ({ name: d.name, path: path.join(base, d.name) }))
-    .filter(d => fs.existsSync(path.join(d.path, 'context.md')))
+function findLatestReviewArtifactDir(cwd: string, prefix?: string): string | null {
+  const entries = getReviewArtifactBases(cwd)
+    .filter(base => fs.existsSync(base))
+    .flatMap(base => fs.readdirSync(base, { withFileTypes: true })
+      .filter(d => d.isDirectory() && (!prefix || d.name.startsWith(prefix)))
+      .map(d => ({ name: d.name, path: path.join(base, d.name) }))
+      .filter(d => fs.existsSync(path.join(d.path, 'context.md'))))
     .sort((a, b) => {
       const aStat = fs.statSync(a.path);
       const bStat = fs.statSync(b.path);
@@ -730,20 +733,7 @@ const initCommand: Command = {
 
       if (existing) {
         const prefix = `${pr.owner}-${pr.repo}-${pr.number}`;
-        const base = path.join(
-          process.env.HOME || process.env.USERPROFILE || '.',
-          '.claude', 'reviews',
-        );
-        let artifactDir: string | null = null;
-        if (fs.existsSync(base)) {
-          const entries = fs.readdirSync(base, { withFileTypes: true })
-            .filter(d => d.isDirectory() && d.name.startsWith(prefix))
-            .map(d => path.join(base, d.name))
-            .filter(d => fs.existsSync(path.join(d, 'context.md')))
-            .sort()
-            .reverse();
-          if (entries.length > 0) artifactDir = entries[0];
-        }
+        const artifactDir = findLatestReviewArtifactDir(ctx.cwd, prefix);
 
         output.writeln(`  Previous review found: ${existing.id.slice(0, 8)}`);
         output.writeln(`  Status: ${formatStatus(existing.status)}`);
@@ -953,20 +943,9 @@ const reportCommand: Command = {
     let reportMarkdown = review.report?.markdown;
     if (!reportMarkdown) {
       const prefix = `${review.pr.owner}-${review.pr.repo}-${review.pr.number}`;
-      const base = path.join(
-        process.env.HOME || process.env.USERPROFILE || '.',
-        '.claude', 'reviews',
-      );
-      if (fs.existsSync(base)) {
-        const dirs = fs.readdirSync(base, { withFileTypes: true })
-          .filter(d => d.isDirectory() && d.name.startsWith(prefix))
-          .map(d => path.join(base, d.name))
-          .filter(d => fs.existsSync(path.join(d, 'report.md')))
-          .sort()
-          .reverse();
-        if (dirs.length > 0) {
-          reportMarkdown = fs.readFileSync(path.join(dirs[0], 'report.md'), 'utf-8');
-        }
+      const artifactDir = findLatestReviewArtifactDir(ctx.cwd, prefix);
+      if (artifactDir && fs.existsSync(path.join(artifactDir, 'report.md'))) {
+        reportMarkdown = fs.readFileSync(path.join(artifactDir, 'report.md'), 'utf-8');
       }
     }
 
@@ -1040,20 +1019,8 @@ const chatCommand: Command = {
 
       if (review) {
         // Find the artifact directory by looking for the most recent matching one
-        const base = path.join(
-          process.env.HOME || process.env.USERPROFILE || '.',
-          '.claude', 'reviews',
-        );
-        if (fs.existsSync(base)) {
-          const prefix = `${review.pr.owner}-${review.pr.repo}-${review.pr.number}`;
-          const entries = fs.readdirSync(base)
-            .filter(d => d.startsWith(prefix))
-            .sort()
-            .reverse();
-          if (entries.length > 0) {
-            reviewDir = path.join(base, entries[0]);
-          }
-        }
+        const prefix = `${review.pr.owner}-${review.pr.repo}-${review.pr.number}`;
+        reviewDir = findLatestReviewArtifactDir(ctx.cwd, prefix);
       }
 
       if (!reviewDir) {
@@ -1062,7 +1029,7 @@ const chatCommand: Command = {
       }
     } else {
       // Find most recent review
-      reviewDir = findLatestReviewDir();
+      reviewDir = findLatestReviewArtifactDir(ctx.cwd);
       if (!reviewDir) {
         output.printError('No reviews found. Run a review first: ruflo review init --url <PR_URL>');
         return { success: false, exitCode: 1 };
@@ -1487,7 +1454,7 @@ export const reviewCommand: Command = {
       'status   - Check review progress',
       'list     - List all reviews',
       'report   - Display review report',
-      'chat     - Interactive Q&A about findings (launches claude)',
+      'chat     - Interactive Q&A about findings (launches codex; falls back to claude)',
       'comment  - List, post, and reply to PR comments',
       'cleanup  - Remove stale reviews (default: older than 3 weeks)',
     ]);
