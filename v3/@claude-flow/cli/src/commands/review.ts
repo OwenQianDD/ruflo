@@ -209,17 +209,49 @@ function promptYesNo(question: string): Promise<boolean> {
  * Launch interactive chat with review context.
  * Uses codex by default. Falls back to claude if codex is unavailable.
  */
-function launchChat(contextFile: string, reviewDir: string, model: string, reviewId?: string): void {
-  const systemPrompt = buildChatSystemPrompt(contextFile, reviewDir, reviewId);
+function prepareChatWorkspace(reviewDir: string, contextFile: string, cwd: string): {
+  reviewDir: string;
+  contextFile: string;
+} {
+  const relativeReviewDir = path.relative(cwd, reviewDir);
+  if (relativeReviewDir && !relativeReviewDir.startsWith('..') && !path.isAbsolute(relativeReviewDir)) {
+    return { reviewDir, contextFile };
+  }
+
+  const stagingBase = path.join(cwd, '.claude', 'review-chat');
+  const stagedReviewDir = path.join(stagingBase, path.basename(reviewDir));
+  fs.mkdirSync(stagedReviewDir, { recursive: true });
+
+  for (const entry of fs.readdirSync(reviewDir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    fs.copyFileSync(
+      path.join(reviewDir, entry.name),
+      path.join(stagedReviewDir, entry.name),
+    );
+  }
+
+  return {
+    reviewDir: stagedReviewDir,
+    contextFile: path.join(stagedReviewDir, path.basename(contextFile)),
+  };
+}
+
+function launchChat(contextFile: string, reviewDir: string, model: string, cwd: string, reviewId?: string): void {
   const codexCmd = process.env.CODEX_CMD || 'codex';
+  const chatWorkspace = prepareChatWorkspace(reviewDir, contextFile, cwd);
+  const systemPrompt = buildChatSystemPrompt(
+    chatWorkspace.contextFile,
+    chatWorkspace.reviewDir,
+    reviewId,
+  );
 
   // Try codex first — pass context as the initial prompt and add the review dir
   try {
     execFileSync('which', [codexCmd], { stdio: 'ignore' });
-    const initialPrompt = `${systemPrompt}\n\nRead ${contextFile} now, then say "Ready — ask me anything about the review."`;
+    const initialPrompt = `${systemPrompt}\n\nRead ${chatWorkspace.contextFile} now, then say "Ready — ask me anything about the review."`;
     execFileSync(codexCmd, [
       '-m', model,
-      '--add-dir', reviewDir,
+      '--add-dir', chatWorkspace.reviewDir,
       initialPrompt,
     ], { stdio: 'inherit' });
     return;
@@ -644,7 +676,7 @@ async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> 
       output.writeln('Entering chat mode — ask follow-up questions about the review.');
       output.writeln(output.dim('(Ctrl+C to exit)'));
       output.writeln();
-      launchChat(contextFile, reviewDir, chatModelResolved, review.id);
+      launchChat(contextFile, reviewDir, chatModelResolved, cwd, review.id);
     }
   }
 
@@ -764,7 +796,7 @@ const initCommand: Command = {
             output.writeln('Entering chat mode — ask follow-up questions about the review.');
             output.writeln(output.dim('(Ctrl+C to exit)'));
             output.writeln();
-            launchChat(contextFile, artifactDir, chatModel, existing.id);
+            launchChat(contextFile, artifactDir, chatModel, ctx.cwd, existing.id);
           }
         }
 
@@ -1046,7 +1078,7 @@ const chatCommand: Command = {
     output.writeln(`Context: ${contextFile}`);
     output.writeln();
 
-    launchChat(contextFile, reviewDir, model);
+    launchChat(contextFile, reviewDir, model, ctx.cwd);
 
     return { success: true };
   },
