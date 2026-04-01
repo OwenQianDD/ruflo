@@ -181,6 +181,35 @@ COMMENT
 \`\`\`
 `;
 
+  const commentStyleSection = !reviewId ? '' : `
+
+## Comment Quality Defaults
+
+When the user asks you to leave PR comments, default to detailed, reviewer-quality comments without needing extra prompting.
+
+- Treat \`high\` and \`critical\` findings as blocking unless the user says otherwise.
+- Prefer posting the blocking findings rather than asking whether to post them, unless the user asked for a draft only.
+- Write comments with enough context that an engineer can understand the issue without rereading the whole review.
+- Explain three things when relevant: what is wrong, why it matters, and what change is needed.
+- Be concrete about user-visible risk, correctness risk, reliability risk, or maintenance risk rather than giving generic feedback.
+- Include a specific remediation direction. If you can infer a likely fix from the review, say it.
+- Keep the tone direct and professional. Avoid filler, vague praise, or one-line comments with no explanation.
+
+Use this default structure for blocking comments:
+
+\`\`\`text
+**[High]** Short statement of the problem
+
+This change is risky because ...
+
+In this code path, ...
+
+Please ...
+\`\`\`
+
+For non-blocking comments, make that explicit and still provide useful context and a concrete suggestion.
+`;
+
   return [
     `You are the Queen Reviewer in post-review chat mode.`,
     `The full review context (PR metadata, all agent findings, and the compiled report) is at:`,
@@ -189,6 +218,7 @@ COMMENT
     `IMMEDIATELY read that file with the Read tool before answering any question.`,
     `Answer based on the review data. If asked to re-check something, reason from the findings and diff.`,
     commentSection,
+    commentStyleSection,
   ].join('\n');
 }
 
