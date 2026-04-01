@@ -23,6 +23,7 @@ import { output } from '../output.js';
 import { createReviewService } from '../services/review-service.js';
 import { createReviewDispatcher } from '../services/review-dispatcher.js';
 import { createPRCommentService } from '../services/review-comments.js';
+import { createReviewIssueService } from '../services/review-issues.js';
 import { parsePRUrl } from '../services/review-types.js';
 import type {
   ReviewStatus,
@@ -135,6 +136,20 @@ ruflo review comment reply ${rid} --comment-id <num> --body '<text>'
 ruflo review comment resolve ${rid} --file <path> --line <num>
 ruflo review comment resolve ${rid} --all
 ruflo review comment resolve ${rid} --file <path> --line <num> --undo
+\`\`\`
+
+## GitHub Issue Commands
+
+Use these commands when a finding should be tracked as follow-up work.
+
+### Create an issue and add it to the default project
+\`\`\`bash
+ruflo review issue create ${rid} --title '<title>' --body '<body>'
+\`\`\`
+
+### Create an issue with an explicit assignee
+\`\`\`bash
+ruflo review issue create ${rid} --title '<title>' --body '<body>' --assignee <github-login>
 \`\`\`
 
 ## CRITICAL: Getting the correct line number
@@ -1405,6 +1420,97 @@ const commentCommand: Command = {
   },
 };
 
+// ============================================================================
+// Issue Subcommand
+// ============================================================================
+
+const DEFAULT_ISSUE_ASSIGNEE = 'OwenQianDD';
+const DEFAULT_PROJECT_OWNER = 'doordash';
+const DEFAULT_PROJECT_NUMBER = 122;
+
+const issueCreateCommand: Command = {
+  name: 'create',
+  description: 'Create a GitHub issue for the repo bound to this review and add it to the default project',
+  options: [
+    { name: 'title', short: 't', type: 'string', description: 'Issue title' },
+    { name: 'body', short: 'b', type: 'string', description: 'Issue body text' },
+    { name: 'assignee', short: 'a', type: 'string', description: `GitHub assignee login (default: ${DEFAULT_ISSUE_ASSIGNEE})` },
+    { name: 'labels', short: 'l', type: 'string', description: 'Comma-separated GitHub labels' },
+    { name: 'project', type: 'string', description: `Project number to add the issue to (default: ${DEFAULT_PROJECT_NUMBER})`, default: String(DEFAULT_PROJECT_NUMBER) },
+    { name: 'project-owner', type: 'string', description: `Project owner login/org (default: ${DEFAULT_PROJECT_OWNER})`, default: DEFAULT_PROJECT_OWNER },
+  ],
+  action: async (ctx: CommandContext): Promise<CommandResult> => {
+    const reviewId = ctx.args[0] as string | undefined;
+    const title = ctx.flags.title as string | undefined;
+    const body = ctx.flags.body as string | undefined;
+    const assignee = (ctx.flags.assignee as string | undefined) || DEFAULT_ISSUE_ASSIGNEE;
+    const labels = ((ctx.flags.labels as string | undefined) || '')
+      .split(',')
+      .map(label => label.trim())
+      .filter(Boolean);
+    const projectOwner = (ctx.flags['project-owner'] as string | undefined) || DEFAULT_PROJECT_OWNER;
+    const projectNumberRaw = (ctx.flags.project as string | undefined) || String(DEFAULT_PROJECT_NUMBER);
+    const projectNumber = parseInt(projectNumberRaw, 10);
+
+    if (!reviewId || !title || !body) {
+      output.printError('Usage: ruflo review issue create <review-id> --title <title> --body "text" [--assignee <login>]');
+      return { success: false, exitCode: 1 };
+    }
+
+    if (isNaN(projectNumber)) {
+      output.printError(`Invalid project number: ${projectNumberRaw}`);
+      return { success: false, exitCode: 1 };
+    }
+
+    const service = createReviewService(ctx.cwd);
+    await service.initialize();
+    const review = service.getReview(reviewId);
+    if (!review) {
+      output.printError(`Review not found: ${reviewId}`);
+      return { success: false, exitCode: 1 };
+    }
+
+    const issueService = createReviewIssueService(review.pr);
+    try {
+      const issue = issueService.createIssue(title, body, {
+        assignee,
+        labels,
+        projectNumber,
+        projectOwner,
+      });
+      output.printSuccess(`Issue created: #${issue.number}`);
+      output.writeln(output.dim(`  ${issue.url}`));
+      output.writeln(output.dim(`  Assignee: ${issue.assignees.join(', ') || assignee}`));
+      output.writeln(output.dim(`  Project: ${projectOwner}/${projectNumber}`));
+      if (issue.labels.length > 0) {
+        output.writeln(output.dim(`  Labels: ${issue.labels.join(', ')}`));
+      }
+      return { success: true, data: { issue } };
+    } catch (error) {
+      output.printError(error instanceof Error ? error.message : String(error));
+      return { success: false, exitCode: 1 };
+    }
+  },
+};
+
+const issueCommand: Command = {
+  name: 'issue',
+  description: 'Create and file GitHub issues for the repo bound to this review',
+  subcommands: [issueCreateCommand],
+  action: async (): Promise<CommandResult> => {
+    output.writeln();
+    output.writeln(output.bold('Review Issue Commands'));
+    output.writeln();
+    output.printList([
+      `create <review-id> --title --body                Create an issue and add it to project ${DEFAULT_PROJECT_NUMBER}`,
+      `create <review-id> --title --body --assignee     Create an issue for a specific assignee`,
+      'create <review-id> --title --body --labels       Apply comma-separated GitHub labels',
+    ]);
+    output.writeln();
+    return { success: true };
+  },
+};
+
 const cleanupCommand: Command = {
   name: 'cleanup',
   description: 'Remove stale reviews and their artifacts',
@@ -1483,6 +1589,7 @@ export const reviewCommand: Command = {
     reportCommand,
     chatCommand,
     commentCommand,
+    issueCommand,
     cleanupCommand,
   ],
   examples: [
@@ -1501,6 +1608,7 @@ export const reviewCommand: Command = {
     { command: 'ruflo review comment list <id>', description: 'List PR comments' },
     { command: 'ruflo review comment post <id> --file <path> --line <n> --body "text"', description: 'Post inline comment' },
     { command: 'ruflo review comment reply <id> --comment-id <n> --body "text"', description: 'Reply to a comment' },
+    { command: 'ruflo review issue create <id> --title "<title>" --body "<text>"', description: 'Create a GitHub issue and add it to project 122' },
     { command: 'ruflo review cleanup', description: 'Remove reviews older than 3 weeks' },
     { command: 'ruflo review cleanup --max-age 7 --dry-run', description: 'Preview cleanup of reviews older than 7 days' },
   ],
@@ -1518,6 +1626,7 @@ export const reviewCommand: Command = {
       'report   - Display review report',
       'chat     - Interactive Q&A about findings (launches codex; falls back to claude)',
       'comment  - List, post, and reply to PR comments',
+      'issue    - Create and file GitHub issues for review follow-up',
       'cleanup  - Remove stale reviews (default: older than 3 weeks)',
     ]);
     output.writeln();
