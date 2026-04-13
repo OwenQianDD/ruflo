@@ -57,6 +57,7 @@ while [[ $# -gt 0 ]]; do
       echo "Options:"
       echo "  -v, --verbose       Debug logging"
       echo "  --log-file <path>   Custom log file"
+      echo "  --fast              Codex-only fast review (skips debate and queen reconciliation)"
       echo "  --claude-only       Skip Codex agents"
       echo "  --force             Force new review even if one exists"
       echo "  --iterate <URL>     Re-review: diff against the previous review"

@@ -42,6 +42,12 @@ Direct CLI:
 ruflo-dev review init --url https://github.com/OwenQianDD/ruflo/pull/1
 ```
 
+Fast Codex-only review:
+
+```bash
+ruflo-dev review init --url https://github.com/OwenQianDD/ruflo/pull/1 --fast
+```
+
 Equivalent direct CLI using explicit fields:
 
 ```bash
@@ -50,6 +56,7 @@ ruflo-dev review init --owner OwenQianDD --repo ruflo --pr 1
 
 ## Useful flags
 
+- `--fast`: run the three review agents on Codex only and skip debate plus queen reconciliation
 - `--claude-only`: skip Codex agents
 - `--skip-worktree`: diff-only mode, no isolated worktree
 - `--skip-debate`: skip the disagreement debate loop
@@ -78,6 +85,8 @@ RECONCILE_BUDGET
 5. Runs pair agreement when both Claude and Codex are available
 6. Resolves disagreements through a debate loop
 7. Produces a final reconciled report
+
+When `--fast` is set, steps 5-7 are replaced with a direct algorithmic report compiled from the Codex agent findings.
 
 The current specialist roles are:
 

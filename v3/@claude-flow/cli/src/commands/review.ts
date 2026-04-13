@@ -348,13 +348,11 @@ function buildCommentContext(threads: PRCommentThread[]): string {
 }
 
 function getReviewArtifactBases(cwd: string): string[] {
-  const bases = [path.join(cwd, '.claude', 'reviews')];
-  const legacyBase = path.join(
-    process.env.HOME || process.env.USERPROFILE || '.',
-    '.claude', 'reviews',
-  );
-  if (!bases.includes(legacyBase)) bases.push(legacyBase);
-  return bases;
+  const home = process.env.HOME || process.env.USERPROFILE || '.';
+  const globalDir = path.join(home, '.claude', 'reviews');
+  const localDir = path.join(cwd, '.claude', 'reviews');
+  if (localDir === globalDir) return [globalDir];
+  return [globalDir, localDir];
 }
 
 function findLatestReviewArtifactDir(cwd: string, prefix?: string): string | null {
@@ -385,6 +383,7 @@ interface PipelineOptions {
   skipWorktree: boolean;
   skipDebate: boolean;
   claudeOnly: boolean;
+  fast: boolean;
   noChat: boolean;
   autoComment: boolean;
   claudeModel?: string;
@@ -400,7 +399,7 @@ interface PipelineOptions {
 async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> {
   const {
     pr, cwd, dispatchConfig, verbose, skipWorktree, skipDebate,
-    claudeOnly, noChat, autoComment, claudeModel, previousReview,
+    claudeOnly, fast, noChat, autoComment, claudeModel, previousReview,
   } = opts;
   const startTime = Date.now();
 
@@ -477,12 +476,32 @@ async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> 
 
   output.writeln();
 
-  // Step 5: Check codex availability, set dualMode
+  // Step 5: Select providers and optional reconciliation path
   const dispatcher = createReviewDispatcher(dispatchConfig);
-  const codexAvailable = !claudeOnly && dispatcher.isCodexAvailable();
-  const dualMode = codexAvailable;
+  const codexAvailable = dispatcher.isCodexAvailable();
+  const codexOnly = fast;
+  const dualMode = !codexOnly && !claudeOnly && codexAvailable;
+  const runDebate = !skipDebate && !fast;
+  const runReconciliation = !fast;
+  const providers: ModelProvider[] = codexOnly
+    ? ['codex']
+    : dualMode
+      ? ['claude', 'codex']
+      : ['claude'];
 
-  if (dualMode) {
+  if (codexOnly && !codexAvailable) {
+    review.status = 'error';
+    review.error = 'Fast mode requires Codex CLI, but it was not found.';
+    service.saveReview(review);
+    if (worktreePath) service.cleanupWorktree(worktreePath, repoPath);
+    output.printError('`--fast` requires the Codex CLI to be installed and available on PATH.');
+    return { success: false, exitCode: 1 };
+  }
+
+  if (codexOnly) {
+    output.writeln(output.bold('Agent Dispatch (Fast Mode: Codex-Only)'));
+    output.writeln('  3 specialist agents run on Codex only; debate and queen reconciliation are skipped.');
+  } else if (dualMode) {
     output.writeln(output.bold('Agent Dispatch (Dual-Model: Opus + Codex GPT 5.4)'));
     output.writeln('  Each role runs independently on both models:');
   } else {
@@ -507,23 +526,17 @@ async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> 
   const extraContext = [commentContext, iterationContext].filter(Boolean).join('\n\n');
 
   for (const role of roles) {
-    let claudePrompt = service.buildAgentPromptForProvider(role, review, 'claude', hasCodebaseAccess);
-    if (extraContext) claudePrompt += '\n\n' + extraContext;
-    const claudeFile = path.join(tmpDir, `prompt-${role}-claude.txt`);
-    fs.writeFileSync(claudeFile, claudePrompt);
-    promptFiles.set(`${role}-claude`, claudeFile);
-
-    if (dualMode) {
-      let codexPrompt = service.buildAgentPromptForProvider(role, review, 'codex', hasCodebaseAccess);
-      if (extraContext) codexPrompt += '\n\n' + extraContext;
-      const codexFile = path.join(tmpDir, `prompt-${role}-codex.txt`);
-      fs.writeFileSync(codexFile, codexPrompt);
-      promptFiles.set(`${role}-codex`, codexFile);
+    for (const provider of providers) {
+      let prompt = service.buildAgentPromptForProvider(role, review, provider, hasCodebaseAccess);
+      if (extraContext) prompt += '\n\n' + extraContext;
+      const promptFile = path.join(tmpDir, `prompt-${role}-${provider}.txt`);
+      fs.writeFileSync(promptFile, prompt);
+      promptFiles.set(`${role}-${provider}`, promptFile);
     }
   }
 
-  const totalAgents = dualMode ? 6 : 3;
-  output.writeln(`  ${totalAgents} prompts prepared (${roles.length} roles x ${dualMode ? 2 : 1} provider${dualMode ? 's' : ''})`);
+  const totalAgents = roles.length * providers.length;
+  output.writeln(`  ${totalAgents} prompts prepared (${roles.length} roles x ${providers.length} provider${providers.length === 1 ? '' : 's'})`);
   output.writeln();
 
   // Step 7: Dispatch agents
@@ -601,7 +614,7 @@ async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> 
   }
 
   // Step 10b: Debate loop
-  if (!skipDebate) {
+  if (runDebate) {
     const disputed = service.findDisagreements(review.agentFindings);
     if (disputed.length > 0) {
       const debatePhase = dualMode ? 3 : 2;
@@ -626,25 +639,38 @@ async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> 
       output.writeln();
       output.writeln(output.dim('  No disputed findings — skipping debate loop'));
     }
+  } else if (fast) {
+    output.writeln();
+    output.writeln(output.dim('  Fast mode enabled — skipping debate loop'));
   }
 
-  // Step 11: Queen reconciliation
-  const queenPhase = dualMode ? (skipDebate ? 3 : 4) : (skipDebate ? 2 : 3);
-  output.writeln();
-  output.writeln(output.bold(`[Phase ${queenPhase}] Queen reconciliation`));
-  review.status = 'compiling';
-  service.saveReview(review);
-
   let reportMarkdown: string;
-  try {
-    reportMarkdown = await dispatcher.runReconciliation(
-      review,
-      agentOutputs,
-      review.pairAgreements,
-      dualMode,
-    );
-  } catch (error) {
-    output.writeln(output.dim(`  Queen reconciliation failed, using algorithmic report: ${error instanceof Error ? error.message : String(error)}`));
+  if (runReconciliation) {
+    // Step 11: Queen reconciliation
+    const queenPhase = dualMode ? (runDebate ? 4 : 3) : (runDebate ? 3 : 2);
+    output.writeln();
+    output.writeln(output.bold(`[Phase ${queenPhase}] Queen reconciliation`));
+    review.status = 'compiling';
+    service.saveReview(review);
+
+    try {
+      reportMarkdown = await dispatcher.runReconciliation(
+        review,
+        agentOutputs,
+        review.pairAgreements,
+        dualMode,
+      );
+    } catch (error) {
+      output.writeln(output.dim(`  Queen reconciliation failed, using algorithmic report: ${error instanceof Error ? error.message : String(error)}`));
+      const report = service.compileReport(review);
+      review.report = report;
+      reportMarkdown = report.markdown;
+    }
+  } else {
+    output.writeln();
+    output.writeln(output.bold('[Phase 2] Fast report compilation'));
+    review.status = 'compiling';
+    service.saveReview(review);
     const report = service.compileReport(review);
     review.report = report;
     reportMarkdown = report.markdown;
@@ -750,6 +776,7 @@ const sharedPipelineOptions = [
   { name: 'pr', short: 'p', type: 'string' as const, description: 'PR number' },
   { name: 'skip-worktree', type: 'boolean' as const, default: false, description: 'Skip worktree creation (diff-only mode)' },
   { name: 'skip-debate', type: 'boolean' as const, default: false, description: 'Skip debate loop' },
+  { name: 'fast', type: 'boolean' as const, default: false, description: 'Codex-only fast review: skip debate and queen reconciliation' },
   { name: 'verbose', short: 'v', type: 'boolean' as const, default: false, description: 'Debug logging to terminal' },
   { name: 'log-file', type: 'string' as const, description: 'Custom log file path' },
   { name: 'claude-model', type: 'string' as const, description: 'Claude model (default: opus, env: CLAUDE_MODEL)' },
@@ -771,6 +798,7 @@ function buildPipelineOptions(ctx: CommandContext, pr: PRIdentifier): Omit<Pipel
     skipWorktree: !!ctx.flags['skip-worktree'],
     skipDebate: !!ctx.flags['skip-debate'],
     claudeOnly: !!ctx.flags['claude-only'],
+    fast: !!ctx.flags.fast,
     noChat: !ctx.flags['chat'],
     autoComment: !!ctx.flags['auto-comment'],
     claudeModel: ctx.flags['claude-model'] as string | undefined,
@@ -1594,6 +1622,7 @@ export const reviewCommand: Command = {
   ],
   examples: [
     { command: 'ruflo review init --url https://github.com/org/repo/pull/123', description: 'Full pipeline review' },
+    { command: 'ruflo review init --url <URL> --fast', description: 'Fast Codex-only review (no debate or queen reconciliation)' },
     { command: 'ruflo review init --url <URL> --claude-only', description: 'Claude-only review (no Codex)' },
     { command: 'ruflo review init --url <URL> --skip-worktree', description: 'Diff-only mode (no codebase access)' },
     { command: 'ruflo review init --url <URL> --force', description: 'Force new review even if one exists' },
