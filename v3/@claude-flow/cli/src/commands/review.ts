@@ -33,6 +33,7 @@ import type {
   DispatchConfig,
   ModelProvider,
   Finding,
+  ReviewSourceKind,
 } from '../services/review-types.js';
 import { DEFAULT_DISPATCH_CONFIG } from '../services/review-types.js';
 
@@ -66,6 +67,60 @@ function resolvePR(ctx: CommandContext): PRIdentifier {
   throw new Error(
     'PR identifier required. Use --url <URL>, --owner/--repo/--pr flags, or pass as argument.'
   );
+}
+
+function resolveReviewSource(ctx: CommandContext): ReviewSourceKind {
+  const source = (ctx.flags.source as string | undefined) || 'pr';
+  if (source === 'pr' || source === 'pr-markdown' || source === 'local-file' || source === 'slack') {
+    return source;
+  }
+  throw new Error(`Unsupported review source: ${source}`);
+}
+
+function resolveReviewInput(ctx: CommandContext, source: ReviewSourceKind): string | undefined {
+  const explicitInput = ctx.flags.input as string | undefined;
+  if (explicitInput) return explicitInput;
+
+  if (source === 'pr' || source === 'pr-markdown') {
+    return ctx.flags.url as string | undefined;
+  }
+
+  return ctx.args[0] as string | undefined;
+}
+
+function requiresPullRequest(source: ReviewSourceKind): boolean {
+  return source === 'pr' || source === 'pr-markdown';
+}
+
+function isCommentableReviewSource(source: ReviewSourceKind): boolean {
+  return source === 'pr';
+}
+
+function reviewArtifactPrefix(
+  review: import('../services/review-types.js').ReviewContext,
+): string {
+  if (review.pr) {
+    return `${review.pr.owner}-${review.pr.repo}-${review.pr.number}`;
+  }
+  return review.target.slug;
+}
+
+function reviewLocator(
+  review: import('../services/review-types.js').ReviewContext,
+): string {
+  if (review.pr) {
+    return `${review.pr.owner}/${review.pr.repo}#${review.pr.number}`;
+  }
+  return review.target.label;
+}
+
+function ensurePRBackedReview(
+  review: import('../services/review-types.js').ReviewContext,
+): PRIdentifier {
+  if (!review.pr || review.content.source !== 'pr') {
+    throw new Error('This command is only supported for pull-request source reviews.');
+  }
+  return review.pr;
 }
 
 function formatStatus(status: ReviewStatus): string {
@@ -227,7 +282,7 @@ For non-blocking comments, make that explicit and still provide useful context a
 
   return [
     `You are the Queen Reviewer in post-review chat mode.`,
-    `The full review context (PR metadata, all agent findings, and the compiled report) is at:`,
+    `The full review context (source content, all agent findings, and the compiled report) is at:`,
     `  ${contextFile}`,
     ``,
     `IMMEDIATELY read that file with the Read tool before answering any question.`,
@@ -376,7 +431,9 @@ function findLatestReviewArtifactDir(cwd: string, prefix?: string): string | nul
 // ============================================================================
 
 interface PipelineOptions {
-  pr: PRIdentifier;
+  source: ReviewSourceKind;
+  input?: string;
+  pr?: PRIdentifier;
   cwd: string;
   dispatchConfig: Partial<DispatchConfig>;
   verbose: boolean;
@@ -387,6 +444,7 @@ interface PipelineOptions {
   noChat: boolean;
   autoComment: boolean;
   claudeModel?: string;
+  customPrompt?: string;
   /** If set, this is an iterative re-review against previousReview */
   previousReview?: import('../services/review-types.js').ReviewContext | null;
 }
@@ -398,74 +456,109 @@ interface PipelineOptions {
  */
 async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> {
   const {
-    pr, cwd, dispatchConfig, verbose, skipWorktree, skipDebate,
-    claudeOnly, fast, noChat, autoComment, claudeModel, previousReview,
+    source, input, pr, cwd, dispatchConfig, verbose, skipWorktree, skipDebate,
+    claudeOnly, fast, noChat, autoComment, claudeModel, customPrompt, previousReview,
   } = opts;
   const startTime = Date.now();
+  const prBacked = requiresPullRequest(source);
+  const commentableSource = isCommentableReviewSource(source);
 
   const service = createReviewService(cwd);
   await service.initialize();
 
-  // Step 1: Validate local repo
-  let repoPath: string;
-  try {
-    repoPath = service.validateLocalRepo(pr);
-    output.writeln(`  Local repo: ${repoPath}`);
-  } catch (error) {
-    output.printError(error instanceof Error ? error.message : String(error));
-    return { success: false, exitCode: 1 };
+  // Step 1: Validate local repo when the source is PR-backed
+  let repoPath: string | undefined;
+  if (prBacked && pr) {
+    try {
+      repoPath = service.validateLocalRepo(pr);
+      output.writeln(`  Local repo: ${repoPath}`);
+    } catch (error) {
+      output.printError(error instanceof Error ? error.message : String(error));
+      return { success: false, exitCode: 1 };
+    }
   }
 
-  // Step 2: Fetch PR metadata
-  output.writeln('  Fetching PR metadata...');
-  let metadata;
-  try {
-    metadata = service.fetchPRMetadata(pr, repoPath);
-    output.writeln(`  Title: ${metadata.title}`);
-    output.writeln(`  Author: ${metadata.author}`);
-    output.writeln(`  Changes: +${metadata.additions}/-${metadata.deletions} across ${metadata.changedFiles.length} files`);
-  } catch (error) {
-    output.printError(error instanceof Error ? error.message : String(error));
-    return { success: false, exitCode: 1 };
-  }
-
-  // Step 3: Create worktree
+  // Step 2: Create worktree when needed
   let worktreePath: string | undefined;
   let hasCodebaseAccess = false;
-  if (!skipWorktree) {
+  const sourceRequiresWorktree = source === 'pr-markdown';
+  if ((prBacked && !skipWorktree) || sourceRequiresWorktree) {
+    if (!pr || !repoPath) {
+      output.printError(`Review source "${source}" requires a pull request and local repo checkout.`);
+      return { success: false, exitCode: 1 };
+    }
     try {
       output.writeln('  Creating isolated worktree...');
       worktreePath = service.createWorktree(pr, repoPath);
       hasCodebaseAccess = true;
       output.writeln(`  Worktree: ${worktreePath}`);
     } catch (error) {
+      if (sourceRequiresWorktree) {
+        output.printError(error instanceof Error ? error.message : String(error));
+        return { success: false, exitCode: 1 };
+      }
       output.writeln(output.dim(`  Worktree creation failed (diff-only mode): ${error instanceof Error ? error.message : String(error)}`));
     }
   } else {
     output.writeln(output.dim('  Worktree skipped (diff-only mode)'));
   }
 
+  // Step 3: Fetch review content through the source adapter
+  output.writeln(prBacked ? '  Fetching review content...' : '  Reading review content...');
+  let fetched;
+  try {
+    fetched = service.fetchReviewContent({
+      source,
+      input,
+      pr,
+      repoPath,
+      worktreePath,
+    });
+    output.writeln(`  Title: ${fetched.content.title}`);
+    output.writeln(`  Author: ${fetched.content.author}`);
+    output.writeln(`  Source: ${fetched.content.source}`);
+    output.writeln(`  Changes: +${fetched.content.additions}/-${fetched.content.deletions} across ${fetched.content.changedFiles.length} files`);
+    if (fetched.content.documents.length > 0) {
+      output.writeln(`  Documents: ${fetched.content.documents.length}`);
+    }
+  } catch (error) {
+    output.printError(error instanceof Error ? error.message : String(error));
+    if (worktreePath && repoPath) service.cleanupWorktree(worktreePath, repoPath);
+    return { success: false, exitCode: 1 };
+  }
+
   // Step 4: Create review context
-  const review = service.createReview(pr, metadata, worktreePath);
+  const review = service.createReview(
+    fetched.target,
+    fetched.content,
+    worktreePath,
+    fetched.pr,
+    customPrompt,
+  );
   output.writeln(`  Review ID: ${review.id}`);
 
   // Step 4a: Fetch existing PR comments for agent context
-  output.writeln('  Fetching PR comments...');
-  const commentService = createPRCommentService(pr);
-  const commentThreads = commentService.getCommentThreads();
+  let commentThreads: PRCommentThread[] = [];
   let commentContext = '';
-  if (commentThreads.length > 0) {
-    output.writeln(`  ${commentThreads.length} comment threads found`);
-    commentContext = buildCommentContext(commentThreads);
+  if (commentableSource && review.pr) {
+    output.writeln('  Fetching PR comments...');
+    const commentService = createPRCommentService(review.pr);
+    commentThreads = commentService.getCommentThreads();
+    if (commentThreads.length > 0) {
+      output.writeln(`  ${commentThreads.length} comment threads found`);
+      commentContext = buildCommentContext(commentThreads);
+    } else {
+      output.writeln(output.dim('  No existing comments'));
+    }
   } else {
-    output.writeln(output.dim('  No existing comments'));
+    output.writeln(output.dim('  PR comments not applicable for this review source'));
   }
 
   // Step 4b: Build iteration context (if iterating)
   let iterationContext = '';
-  if (previousReview) {
+  if (previousReview && pr && repoPath) {
     output.writeln('  Computing delta against previous review...');
-    const delta = service.fetchPRDelta(pr, previousReview.metadata, repoPath);
+    const delta = service.fetchPRDelta(pr, previousReview.content, repoPath);
     iterationContext = service.buildIterationContext(previousReview, delta, commentThreads);
     review.iterationOf = previousReview.id;
     service.saveReview(review);
@@ -493,7 +586,7 @@ async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> 
     review.status = 'error';
     review.error = 'Fast mode requires Codex CLI, but it was not found.';
     service.saveReview(review);
-    if (worktreePath) service.cleanupWorktree(worktreePath, repoPath);
+    if (worktreePath && repoPath) service.cleanupWorktree(worktreePath, repoPath);
     output.printError('`--fast` requires the Codex CLI to be installed and available on PATH.');
     return { success: false, exitCode: 1 };
   }
@@ -572,7 +665,7 @@ async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> 
     review.status = 'error';
     review.error = 'All agents failed';
     service.saveReview(review);
-    if (worktreePath) service.cleanupWorktree(worktreePath, repoPath);
+    if (worktreePath && repoPath) service.cleanupWorktree(worktreePath, repoPath);
     output.printError('All agents failed. Check log files for details.');
     if (verbose) {
       for (const agent of agents) {
@@ -705,29 +798,33 @@ async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> 
 
   // Step 13b: Auto-comment — user opted in with --auto-comment, no prompt needed
   if (autoComment) {
-    const allFindings: Finding[] = review.agentFindings.flatMap(af => af.findings);
-    const commentable = allFindings.filter(f => f.file && f.line);
-    output.writeln(output.dim(`  Auto-comment: ${allFindings.length} total findings, ${commentable.length} with file+line`));
-    if (commentable.length > 0) {
-      output.writeln(`  Posting ${commentable.length} findings as PR comments...`);
-      for (const f of commentable) {
-        output.writeln(`    [${f.severity}] ${f.file}:${f.line} — ${f.title.slice(0, 80)}`);
-      }
-      output.writeln();
-      const commentService = createPRCommentService(pr);
-      const result = await dispatcher.postFindingsAsComments(commentService, commentable, review.id);
-      output.writeln(`  Posted ${result.posted} comments, ${result.skipped} skipped, ${result.errors.length} errors`);
-      if (result.errors.length > 0) {
-        for (const err of result.errors) {
-          output.writeln(output.dim(`    Error: ${err}`));
+    if (!commentableSource || !review.pr) {
+      output.writeln(output.dim('  Auto-comment skipped: only PR source reviews can post GitHub comments.'));
+    } else {
+      const allFindings: Finding[] = review.agentFindings.flatMap(af => af.findings);
+      const commentable = allFindings.filter(f => f.file && f.line);
+      output.writeln(output.dim(`  Auto-comment: ${allFindings.length} total findings, ${commentable.length} with file+line`));
+      if (commentable.length > 0) {
+        output.writeln(`  Posting ${commentable.length} findings as PR comments...`);
+        for (const f of commentable) {
+          output.writeln(`    [${f.severity}] ${f.file}:${f.line} — ${f.title.slice(0, 80)}`);
         }
+        output.writeln();
+        const commentService = createPRCommentService(review.pr);
+        const result = await dispatcher.postFindingsAsComments(commentService, commentable, review.id);
+        output.writeln(`  Posted ${result.posted} comments, ${result.skipped} skipped, ${result.errors.length} errors`);
+        if (result.errors.length > 0) {
+          for (const err of result.errors) {
+            output.writeln(output.dim(`    Error: ${err}`));
+          }
+        }
+        output.writeln();
       }
-      output.writeln();
     }
   }
 
   // Step 14: Cleanup worktree
-  if (worktreePath) {
+  if (worktreePath && repoPath) {
     service.cleanupWorktree(worktreePath, repoPath);
     if (verbose) output.writeln(output.dim('  Worktree cleaned up'));
   }
@@ -770,10 +867,13 @@ async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> 
 // ============================================================================
 
 const sharedPipelineOptions = [
+  { name: 'source', type: 'string' as const, default: 'pr', choices: ['pr', 'pr-markdown', 'local-file', 'slack'], description: 'Review input source (default: pr)' },
+  { name: 'input', type: 'string' as const, description: 'Source-specific input: PR URL/shorthand, local file path, or slack export path' },
   { name: 'url', short: 'u', type: 'string' as const, description: 'Full PR URL (https://github.com/owner/repo/pull/123)' },
   { name: 'owner', short: 'o', type: 'string' as const, description: 'Repository owner' },
   { name: 'repo', short: 'r', type: 'string' as const, description: 'Repository name' },
   { name: 'pr', short: 'p', type: 'string' as const, description: 'PR number' },
+  { name: 'review-prompt', type: 'string' as const, description: 'Custom review prompt appended to all specialist and coordinator prompts' },
   { name: 'skip-worktree', type: 'boolean' as const, default: false, description: 'Skip worktree creation (diff-only mode)' },
   { name: 'skip-debate', type: 'boolean' as const, default: false, description: 'Skip debate loop' },
   { name: 'fast', type: 'boolean' as const, default: false, description: 'Codex-only fast review: skip debate and queen reconciliation' },
@@ -789,8 +889,14 @@ const sharedPipelineOptions = [
 ];
 
 /** Build PipelineOptions from CommandContext flags. */
-function buildPipelineOptions(ctx: CommandContext, pr: PRIdentifier): Omit<PipelineOptions, 'previousReview'> {
+function buildPipelineOptions(
+  ctx: CommandContext,
+  source: ReviewSourceKind,
+  pr?: PRIdentifier,
+): Omit<PipelineOptions, 'previousReview'> {
   return {
+    source,
+    input: resolveReviewInput(ctx, source),
     pr,
     cwd: ctx.cwd,
     dispatchConfig: buildDispatchConfig(ctx),
@@ -802,6 +908,7 @@ function buildPipelineOptions(ctx: CommandContext, pr: PRIdentifier): Omit<Pipel
     noChat: !ctx.flags['chat'],
     autoComment: !!ctx.flags['auto-comment'],
     claudeModel: ctx.flags['claude-model'] as string | undefined,
+    customPrompt: ctx.flags['review-prompt'] as string | undefined,
   };
 }
 
@@ -817,21 +924,41 @@ const initCommand: Command = {
     { name: 'force', type: 'boolean', default: false, description: 'Force a new review even if one already exists for this PR' },
   ],
   action: async (ctx: CommandContext): Promise<CommandResult> => {
-    let pr: PRIdentifier;
+    let source: ReviewSourceKind;
     try {
-      pr = resolvePR(ctx);
+      source = resolveReviewSource(ctx);
     } catch (error) {
       output.printError(error instanceof Error ? error.message : String(error));
       return { success: false, exitCode: 1 };
     }
 
+    let pr: PRIdentifier | undefined;
+    if (requiresPullRequest(source)) {
+      try {
+        pr = resolvePR(ctx);
+      } catch (error) {
+        output.printError(error instanceof Error ? error.message : String(error));
+        return { success: false, exitCode: 1 };
+      }
+    }
+
+    const input = resolveReviewInput(ctx, source);
+    if (!requiresPullRequest(source) && !input) {
+      output.printError(`Review source "${source}" requires --input <path>.`);
+      return { success: false, exitCode: 1 };
+    }
+
     output.writeln();
-    output.writeln(output.bold('AI Consortium PR Review'));
-    output.writeln(output.dim(`PR #${pr.number} — ${pr.owner}/${pr.repo}`));
+    output.writeln(output.bold(source === 'pr' ? 'AI Consortium PR Review' : 'AI Consortium Design Doc Review'));
+    output.writeln(output.dim(
+      pr
+        ? `PR #${pr.number} — ${pr.owner}/${pr.repo} (${source})`
+        : `${source} — ${input}`,
+    ));
     output.writeln();
 
     // Check for existing completed review (skip if --force)
-    if (!ctx.flags.force) {
+    if (!ctx.flags.force && source === 'pr' && pr) {
       const service = createReviewService(ctx.cwd);
       await service.initialize();
       const existing = service.findReviewForPR(pr);
@@ -880,7 +1007,7 @@ const initCommand: Command = {
       }
     }
 
-    return runReviewPipeline({ ...buildPipelineOptions(ctx, pr), previousReview: null });
+    return runReviewPipeline({ ...buildPipelineOptions(ctx, source, pr), previousReview: null });
   },
 };
 
@@ -915,7 +1042,7 @@ const iterateCommand: Command = {
 
     output.writeln(`  Iterating on previous review: ${previousReview.id.slice(0, 8)}`);
 
-    return runReviewPipeline({ ...buildPipelineOptions(ctx, pr), previousReview });
+    return runReviewPipeline({ ...buildPipelineOptions(ctx, 'pr', pr), previousReview });
   },
 };
 
@@ -951,8 +1078,9 @@ const statusCommand: Command = {
     output.writeln();
     output.printBox([
       `ID: ${review.id}`,
-      `PR: ${review.pr.owner}/${review.pr.repo}#${review.pr.number}`,
-      `Title: ${review.metadata.title}`,
+      `Target: ${reviewLocator(review)}`,
+      `Title: ${review.content.title}`,
+      `Source: ${review.content.source}`,
       `Status: ${formatStatus(review.status)}`,
       `Agents reported: ${review.agentFindings.length}/3`,
       `Debates: ${review.debates.length}`,
@@ -992,13 +1120,14 @@ const listCommand: Command = {
     }
 
     output.writeln();
-    output.writeln(output.bold('PR Reviews'));
+    output.writeln(output.bold('Reviews'));
     output.writeln();
 
     const rows = reviews.map(r => ({
       id: r.id.slice(0, 8),
-      pr: `${r.pr.owner}/${r.pr.repo}#${r.pr.number}`,
-      title: r.metadata.title.slice(0, 40),
+      target: reviewLocator(r),
+      title: r.content.title.slice(0, 40),
+      source: r.content.source,
       status: formatStatus(r.status),
       findings: String(r.agentFindings.reduce((n, af) => n + af.findings.length, 0)),
       updated: new Date(r.updatedAt).toLocaleDateString(),
@@ -1007,8 +1136,9 @@ const listCommand: Command = {
     output.printTable({
       columns: [
         { key: 'id', header: 'ID', width: 10 },
-        { key: 'pr', header: 'PR', width: 24 },
+        { key: 'target', header: 'Target', width: 28 },
         { key: 'title', header: 'Title', width: 42 },
+        { key: 'source', header: 'Source', width: 14 },
         { key: 'status', header: 'Status', width: 16 },
         { key: 'findings', header: 'Findings', width: 10 },
         { key: 'updated', header: 'Updated', width: 12 },
@@ -1047,7 +1177,7 @@ const reportCommand: Command = {
     // produced the markdown directly. Fall back to the artifact directory's report.md.
     let reportMarkdown = review.report?.markdown;
     if (!reportMarkdown) {
-      const prefix = `${review.pr.owner}-${review.pr.repo}-${review.pr.number}`;
+      const prefix = reviewArtifactPrefix(review);
       const artifactDir = findLatestReviewArtifactDir(ctx.cwd, prefix);
       if (artifactDir && fs.existsSync(path.join(artifactDir, 'report.md'))) {
         reportMarkdown = fs.readFileSync(path.join(artifactDir, 'report.md'), 'utf-8');
@@ -1124,7 +1254,7 @@ const chatCommand: Command = {
 
       if (review) {
         // Find the artifact directory by looking for the most recent matching one
-        const prefix = `${review.pr.owner}-${review.pr.repo}-${review.pr.number}`;
+        const prefix = reviewArtifactPrefix(review);
         reviewDir = findLatestReviewArtifactDir(ctx.cwd, prefix);
       }
 
@@ -1182,7 +1312,15 @@ const commentListCommand: Command = {
       return { success: false, exitCode: 1 };
     }
 
-    const commentService = createPRCommentService(review.pr);
+    let pr: PRIdentifier;
+    try {
+      pr = ensurePRBackedReview(review);
+    } catch (error) {
+      output.printError(error instanceof Error ? error.message : String(error));
+      return { success: false, exitCode: 1 };
+    }
+
+    const commentService = createPRCommentService(pr);
     const comments = commentService.listComments();
 
     if (ctx.flags.json) {
@@ -1196,7 +1334,7 @@ const commentListCommand: Command = {
     }
 
     output.writeln();
-    output.writeln(output.bold(`PR #${review.pr.number} Comments (${comments.length})`));
+    output.writeln(output.bold(`PR #${pr.number} Comments (${comments.length})`));
     output.writeln();
     for (const c of comments) {
       const loc = c.file ? `  ${c.file}${c.line ? `:${c.line}` : ''}` : '';
@@ -1246,7 +1384,15 @@ const commentPostCommand: Command = {
       return { success: false, exitCode: 1 };
     }
 
-    const commentService = createPRCommentService(review.pr);
+    let pr: PRIdentifier;
+    try {
+      pr = ensurePRBackedReview(review);
+    } catch (error) {
+      output.printError(error instanceof Error ? error.message : String(error));
+      return { success: false, exitCode: 1 };
+    }
+
+    const commentService = createPRCommentService(pr);
     try {
       const comment = commentService.postComment(file, line, body, side);
       output.printSuccess(`Comment posted: #${comment.id}`);
@@ -1290,7 +1436,15 @@ const commentReplyCommand: Command = {
       return { success: false, exitCode: 1 };
     }
 
-    const commentService = createPRCommentService(review.pr);
+    let pr: PRIdentifier;
+    try {
+      pr = ensurePRBackedReview(review);
+    } catch (error) {
+      output.printError(error instanceof Error ? error.message : String(error));
+      return { success: false, exitCode: 1 };
+    }
+
+    const commentService = createPRCommentService(pr);
     try {
       const reply = commentService.replyToComment(commentId, body);
       output.printSuccess(`Reply posted: #${reply.id}`);
@@ -1328,7 +1482,15 @@ const commentResolveCommand: Command = {
       return { success: false, exitCode: 1 };
     }
 
-    const commentService = createPRCommentService(review.pr);
+    let pr: PRIdentifier;
+    try {
+      pr = ensurePRBackedReview(review);
+    } catch (error) {
+      output.printError(error instanceof Error ? error.message : String(error));
+      return { success: false, exitCode: 1 };
+    }
+
+    const commentService = createPRCommentService(pr);
     const undo = !!ctx.flags.undo;
     const resolveAll = !!ctx.flags.all;
 
@@ -1498,7 +1660,15 @@ const issueCreateCommand: Command = {
       return { success: false, exitCode: 1 };
     }
 
-    const issueService = createReviewIssueService(review.pr);
+    let pr: PRIdentifier;
+    try {
+      pr = ensurePRBackedReview(review);
+    } catch (error) {
+      output.printError(error instanceof Error ? error.message : String(error));
+      return { success: false, exitCode: 1 };
+    }
+
+    const issueService = createReviewIssueService(pr);
     try {
       const issue = issueService.createIssue(title, body, {
         assignee,
@@ -1570,7 +1740,7 @@ const cleanupCommand: Command = {
 
     if (dryRun) {
       for (const r of stale) {
-        output.writeln(`  ${r.id.slice(0, 8)}  ${r.pr.owner}/${r.pr.repo}#${r.pr.number}  updated ${new Date(r.updatedAt).toLocaleDateString()}`);
+        output.writeln(`  ${r.id.slice(0, 8)}  ${reviewLocator(r)}  updated ${new Date(r.updatedAt).toLocaleDateString()}`);
       }
       output.writeln();
       output.writeln(`  ${stale.length} review(s) would be removed. Run without --dry-run to delete.`);
@@ -1578,7 +1748,7 @@ const cleanupCommand: Command = {
       if (ctx.flags.json) {
         output.printJson(stale.map(r => ({
           id: r.id,
-          pr: `${r.pr.owner}/${r.pr.repo}#${r.pr.number}`,
+          pr: reviewLocator(r),
           updatedAt: r.updatedAt,
         })));
       }
@@ -1608,7 +1778,7 @@ const cleanupCommand: Command = {
 
 export const reviewCommand: Command = {
   name: 'review',
-  description: 'Multi-agent PR review with dual-model dispatch and codebase access',
+  description: 'Multi-agent review for PRs and design docs with dual-model dispatch',
   subcommands: [
     initCommand,
     iterateCommand,
@@ -1622,6 +1792,10 @@ export const reviewCommand: Command = {
   ],
   examples: [
     { command: 'ruflo review init --url https://github.com/org/repo/pull/123', description: 'Full pipeline review' },
+    { command: 'ruflo review init --source pr-markdown --url https://github.com/org/repo/pull/123', description: 'Review markdown design docs from a PR' },
+    { command: 'ruflo review init --source local-file --input ./docs/design.md', description: 'Review a local design doc file' },
+    { command: 'ruflo review init --source slack --input ./tmp/thread.json', description: 'Review a Slack thread export' },
+    { command: 'ruflo review init --source local-file --input ./docs/design.md --review-prompt "Focus on rollout risk"', description: 'Review with a custom prompt' },
     { command: 'ruflo review init --url <URL> --fast', description: 'Fast Codex-only review (no debate or queen reconciliation)' },
     { command: 'ruflo review init --url <URL> --claude-only', description: 'Claude-only review (no Codex)' },
     { command: 'ruflo review init --url <URL> --skip-worktree', description: 'Diff-only mode (no codebase access)' },
@@ -1643,24 +1817,25 @@ export const reviewCommand: Command = {
   ],
   action: async (): Promise<CommandResult> => {
     output.writeln();
-    output.writeln(output.bold('AI Consortium PR Review'));
-    output.writeln(output.dim('Dual-model review with full codebase access'));
+    output.writeln(output.bold('AI Consortium Review'));
+    output.writeln(output.dim('Dual-model review for pull requests and design docs'));
     output.writeln();
     output.writeln('Commands:');
     output.printList([
-      'init     - Start a new review (full pipeline: dispatch, monitor, reconcile)',
+      'init     - Start a new review (PR, markdown PR docs, local file, or Slack export)',
       'iterate  - Re-review a PR (diff against previous review)',
       'status   - Check review progress',
       'list     - List all reviews',
       'report   - Display review report',
       'chat     - Interactive Q&A about findings (launches codex; falls back to claude)',
-      'comment  - List, post, and reply to PR comments',
-      'issue    - Create and file GitHub issues for review follow-up',
+      'comment  - List, post, and reply to PR comments for PR-source reviews',
+      'issue    - Create and file GitHub issues for PR-source reviews',
       'cleanup  - Remove stale reviews (default: older than 3 weeks)',
     ]);
     output.writeln();
     output.writeln('Example:');
     output.writeln(output.dim('  ruflo review init --url https://github.com/org/repo/pull/123'));
+    output.writeln(output.dim('  ruflo review init --source local-file --input ./docs/design.md'));
     output.writeln(output.dim('  ruflo review iterate --url https://github.com/org/repo/pull/123'));
     return { success: true };
   },

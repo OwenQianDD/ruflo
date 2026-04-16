@@ -10,9 +10,11 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import type {
+  FetchReviewContentRequest,
+  FetchReviewContentResult,
   PRIdentifier,
   PRMetadata,
-  ChangedFile,
+  ReviewContent,
   ReviewContext,
   ReviewConfig,
   ReviewStatus,
@@ -27,19 +29,29 @@ import type {
   ModelProvider,
   PRDelta,
   PRCommentThread,
+  ReviewTarget,
 } from './review-types.js';
 import { DEFAULT_REVIEW_CONFIG } from './review-types.js';
+import { fetchReviewContent as fetchReviewContentFromSource } from './review-content.js';
 
 // ============================================================================
 // ReviewService
 // ============================================================================
 
 export class ReviewService {
+  /** Primary (global) directory — new reviews are always written here. */
   private reviewsDir: string;
+  /** All directories to read from (global first, then project-local for back-compat). */
+  private readDirs: string[];
   private config: ReviewConfig;
 
   constructor(projectRoot: string, config?: Partial<ReviewConfig>) {
-    this.reviewsDir = path.join(projectRoot, '.claude', 'reviews');
+    const home = process.env.HOME || process.env.USERPROFILE || '.';
+    this.reviewsDir = path.join(home, '.claude', 'reviews');
+    const localDir = path.join(projectRoot, '.claude', 'reviews');
+    this.readDirs = localDir === this.reviewsDir
+      ? [this.reviewsDir]
+      : [this.reviewsDir, localDir];
     this.config = { ...DEFAULT_REVIEW_CONFIG, ...config };
   }
 
@@ -87,56 +99,17 @@ export class ReviewService {
   // ==========================================================================
 
   fetchPRMetadata(pr: PRIdentifier, repoPath: string): PRMetadata {
-    const ghArgs = [
-      'pr', 'view', String(pr.number),
-      '--repo', `${pr.owner}/${pr.repo}`,
-      '--json', 'title,body,author,baseRefName,headRefName,additions,deletions,files',
-    ];
+    return this.fetchReviewContent({
+      source: 'pr',
+      pr,
+      repoPath,
+    }).content;
+  }
 
-    let prJson: string;
-    try {
-      prJson = execFileSync('gh', ghArgs, {
-        encoding: 'utf-8',
-        cwd: repoPath,
-      });
-    } catch (error) {
-      throw new Error(
-        `Failed to fetch PR #${pr.number}: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-
-    const raw = JSON.parse(prJson);
-
-    let diff = '';
-    try {
-      diff = execFileSync('gh', [
-        'pr', 'diff', String(pr.number),
-        '--repo', `${pr.owner}/${pr.repo}`,
-      ], { encoding: 'utf-8', cwd: repoPath });
-    } catch {
-      // diff may fail for very large PRs; continue without it
-    }
-
-    const changedFiles: ChangedFile[] = (raw.files || []).map(
-      (f: { path: string; additions: number; deletions: number; status?: string }) => ({
-        path: f.path,
-        additions: f.additions || 0,
-        deletions: f.deletions || 0,
-        status: mapFileStatus(f.status),
-      })
-    );
-
-    return {
-      title: raw.title || '',
-      body: raw.body || '',
-      author: raw.author?.login || raw.author || '',
-      baseBranch: raw.baseRefName || 'main',
-      headBranch: raw.headRefName || '',
-      diff,
-      changedFiles,
-      additions: raw.additions || 0,
-      deletions: raw.deletions || 0,
-    };
+  fetchReviewContent(
+    request: FetchReviewContentRequest,
+  ): FetchReviewContentResult {
+    return fetchReviewContentFromSource(request);
   }
 
   // ==========================================================================
@@ -187,17 +160,30 @@ export class ReviewService {
   // Review CRUD
   // ==========================================================================
 
-  createReview(pr: PRIdentifier, metadata: PRMetadata, worktreePath?: string): ReviewContext {
+  createReview(
+    targetOrPR: ReviewTarget | PRIdentifier,
+    content: ReviewContent,
+    worktreePath?: string,
+    pr?: PRIdentifier,
+    customPrompt?: string,
+  ): ReviewContext {
     const now = new Date().toISOString();
+    const target = isPRIdentifier(targetOrPR)
+      ? this.buildPRTarget(targetOrPR)
+      : targetOrPR;
+    const resolvedPR = isPRIdentifier(targetOrPR) ? targetOrPR : pr;
+
     const review: ReviewContext = {
       id: randomUUID(),
-      pr,
-      metadata,
+      target,
+      content,
+      pr: resolvedPR,
       status: 'initializing',
       worktreePath,
       agentFindings: [],
       pairAgreements: [],
       debates: [],
+      customPrompt,
       config: this.config,
       createdAt: now,
       updatedAt: now,
@@ -208,59 +194,75 @@ export class ReviewService {
   }
 
   getReview(id: string): ReviewContext | null {
-    // Exact match first
-    const filePath = path.join(this.reviewsDir, `${id}.json`);
-    if (fs.existsSync(filePath)) {
-      try {
-        return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as ReviewContext;
-      } catch {
-        return null;
+    for (const dir of this.readDirs) {
+      // Exact match first
+      const filePath = path.join(dir, `${id}.json`);
+      if (fs.existsSync(filePath)) {
+        try {
+          return this.normalizeReview(
+            JSON.parse(fs.readFileSync(filePath, 'utf-8')) as ReviewContext,
+          );
+        } catch {
+          continue;
+        }
+      }
+
+      // Short prefix match
+      if (!fs.existsSync(dir)) continue;
+      const matches = fs.readdirSync(dir)
+        .filter(f => f.endsWith('.json') && f !== 'config.json' && f.startsWith(id));
+
+      if (matches.length > 1) {
+        const matchIds = matches.map(f => f.replace('.json', ''));
+        throw new Error(
+          `Ambiguous review ID "${id}" matches ${matches.length} reviews. ` +
+          `Use a longer prefix or the full ID:\n` +
+          matchIds.map(m => `  ${m}`).join('\n')
+        );
+      }
+
+      if (matches.length === 1) {
+        try {
+          return this.normalizeReview(
+            JSON.parse(
+              fs.readFileSync(path.join(dir, matches[0]), 'utf-8'),
+            ) as ReviewContext,
+          );
+        } catch {
+          continue;
+        }
       }
     }
-
-    // Short prefix match — find all review files matching the prefix
-    if (!fs.existsSync(this.reviewsDir)) return null;
-    const matches = fs.readdirSync(this.reviewsDir)
-      .filter(f => f.endsWith('.json') && f !== 'config.json' && f.startsWith(id));
-
-    if (matches.length === 0) return null;
-    if (matches.length > 1) {
-      const matchIds = matches.map(f => f.replace('.json', ''));
-      throw new Error(
-        `Ambiguous review ID "${id}" matches ${matches.length} reviews. ` +
-        `Use a longer prefix or the full ID:\n` +
-        matchIds.map(m => `  ${m}`).join('\n')
-      );
-    }
-
-    try {
-      return JSON.parse(
-        fs.readFileSync(path.join(this.reviewsDir, matches[0]), 'utf-8')
-      ) as ReviewContext;
-    } catch {
-      return null;
-    }
+    return null;
   }
 
   listReviews(statusFilter?: ReviewStatus): ReviewContext[] {
-    if (!fs.existsSync(this.reviewsDir)) return [];
-
-    const files = fs.readdirSync(this.reviewsDir).filter(
-      f => f.endsWith('.json') && f !== 'config.json'
-    );
-
+    const seen = new Set<string>();
     const reviews: ReviewContext[] = [];
-    for (const file of files) {
-      try {
-        const review = JSON.parse(
-          fs.readFileSync(path.join(this.reviewsDir, file), 'utf-8')
-        ) as ReviewContext;
 
-        if (!statusFilter || review.status === statusFilter) {
-          reviews.push(review);
+    for (const dir of this.readDirs) {
+      if (!fs.existsSync(dir)) continue;
+
+      const files = fs.readdirSync(dir).filter(
+        f => f.endsWith('.json') && f !== 'config.json'
+      );
+
+      for (const file of files) {
+        if (seen.has(file)) continue;
+        seen.add(file);
+        try {
+          const review = this.normalizeReview(
+            JSON.parse(
+              fs.readFileSync(path.join(dir, file), 'utf-8'),
+            ) as ReviewContext,
+          );
+
+          if (!statusFilter || review.status === statusFilter) {
+            reviews.push(review);
+          }
+        } catch {
+          // Skip corrupted files
         }
-      } catch {
-        // Skip corrupted files
       }
     }
 
@@ -276,7 +278,12 @@ export class ReviewService {
   findReviewForPR(pr: PRIdentifier): ReviewContext | null {
     const completed = this.listReviews('completed');
     return completed.find(
-      r => r.pr.owner === pr.owner && r.pr.repo === pr.repo && r.pr.number === pr.number
+      (r) =>
+        r.target.kind === 'pull-request' &&
+        r.pr &&
+        r.pr.owner === pr.owner &&
+        r.pr.repo === pr.repo &&
+        r.pr.number === pr.number
     ) || null;
   }
 
@@ -299,37 +306,28 @@ export class ReviewService {
     const all = this.listReviews();
     const removed: { id: string; pr: string; updatedAt: string }[] = [];
 
-    const artifactBases = [
-      this.reviewsDir,
-      path.join(
-        process.env.HOME || process.env.USERPROFILE || '.',
-        '.claude', 'reviews',
-      ),
-    ].filter((base, index, bases) => bases.indexOf(base) === index);
-
     for (const review of all) {
       const updated = new Date(review.updatedAt).getTime();
       if (updated >= cutoff) continue;
 
-      // Remove the review state JSON
-      const stateFile = path.join(this.reviewsDir, `${review.id}.json`);
-      try { fs.unlinkSync(stateFile); } catch { /* already gone */ }
-
-      // Remove matching artifact directories from the project-local store first,
-      // with a fallback sweep for legacy artifacts under ~/.claude/reviews.
-      const prefix = `${review.pr.owner}-${review.pr.repo}-${review.pr.number}`;
-      for (const artifactsBase of artifactBases) {
-        if (!fs.existsSync(artifactsBase)) continue;
-        const dirs = fs.readdirSync(artifactsBase, { withFileTypes: true })
+      // Remove the review state JSON and artifact directories from all read dirs
+      const prefix = this.getArtifactPrefix(review);
+      for (const dir of this.readDirs) {
+        if (!fs.existsSync(dir)) continue;
+        // State file
+        const stateFile = path.join(dir, `${review.id}.json`);
+        try { fs.unlinkSync(stateFile); } catch { /* already gone */ }
+        // Artifact directories
+        const artifactDirs = fs.readdirSync(dir, { withFileTypes: true })
           .filter(d => d.isDirectory() && d.name.startsWith(prefix));
-        for (const dir of dirs) {
-          try { fs.rmSync(path.join(artifactsBase, dir.name), { recursive: true }); } catch { /* best effort */ }
+        for (const d of artifactDirs) {
+          try { fs.rmSync(path.join(dir, d.name), { recursive: true }); } catch { /* best effort */ }
         }
       }
 
       removed.push({
         id: review.id,
-        pr: `${review.pr.owner}/${review.pr.repo}#${review.pr.number}`,
+        pr: this.getReviewLocator(review),
         updatedAt: review.updatedAt,
       });
     }
@@ -350,27 +348,10 @@ export class ReviewService {
     review: ReviewContext,
     providerLabel?: string
   ): string {
-    const { metadata, pr } = review;
-    const fileSummary = metadata.changedFiles
+    const { content } = review;
+    const fileSummary = content.changedFiles
       .map(f => `  ${f.status} ${f.path} (+${f.additions}/-${f.deletions})`)
       .join('\n');
-
-    const base = [
-      `You are reviewing PR #${pr.number} in ${pr.owner}/${pr.repo}.`,
-      `Title: ${metadata.title}`,
-      `Author: ${metadata.author}`,
-      `Branch: ${metadata.headBranch} -> ${metadata.baseBranch}`,
-      `Changes: +${metadata.additions}/-${metadata.deletions} across ${metadata.changedFiles.length} files`,
-      '',
-      'Changed files:',
-      fileSummary,
-      '',
-      'PR Description:',
-      metadata.body || '(none)',
-      '',
-      'Diff:',
-      metadata.diff.slice(0, 50000), // Truncate very large diffs
-    ].join('\n');
 
     const fixInstructions = [
       'IMPORTANT: For every finding, you MUST include a concrete suggested fix in the "suggestion" field.',
@@ -381,24 +362,42 @@ export class ReviewService {
 
     const roleInstructions: Record<string, string> = {
       'security-auditor': [
-        'Focus on: OWASP Top 10, race conditions, credential exposure, input validation, auth flaws, crypto weaknesses.',
+        review.target.kind === 'pull-request'
+          ? 'Focus on: OWASP Top 10, race conditions, credential exposure, input validation, auth flaws, crypto weaknesses.'
+          : 'Focus on: security assumptions, authz/authn gaps, data privacy, abuse resistance, trust boundaries, and risky rollout decisions in the design.',
         fixInstructions,
         'Return your findings as JSON matching the AgentFindings interface.',
       ].join('\n'),
       'logic-checker': [
-        'Focus on: Algorithmic correctness, off-by-one errors, boundary conditions, error handling, dead code, test gaps.',
+        review.target.kind === 'pull-request'
+          ? 'Focus on: Algorithmic correctness, off-by-one errors, boundary conditions, error handling, dead code, test gaps.'
+          : 'Focus on: requirement gaps, correctness, edge cases, failure modes, unclear assumptions, and missing validation in the design.',
         fixInstructions,
         'Return your findings as JSON matching the AgentFindings interface.',
       ].join('\n'),
       'integration-specialist': [
-        'Focus on: Breaking API changes, architectural drift, cross-module impact, dependency changes, migration safety.',
+        review.target.kind === 'pull-request'
+          ? 'Focus on: Breaking API changes, architectural drift, cross-module impact, dependency changes, migration safety.'
+          : 'Focus on: system boundaries, dependency impact, rollout, migration safety, operability, observability, and compatibility with existing systems.',
         fixInstructions,
         'Return your findings as JSON matching the AgentFindings interface.',
       ].join('\n'),
     };
 
     const providerNote = providerLabel ? `\nYou are running as: ${providerLabel}.\n` : '';
-    return `${base}${providerNote}\n\n${roleInstructions[agentRole]}\n\nRespond ONLY with valid JSON.`;
+    return [
+      this.buildReviewPromptContext(review),
+      providerNote.trim(),
+      roleInstructions[agentRole],
+      review.customPrompt
+        ? [
+            'Custom Review Prompt:',
+            review.customPrompt,
+            'Treat the custom review prompt as mandatory additional review criteria.',
+          ].join('\n')
+        : '',
+      'Respond ONLY with valid JSON.',
+    ].filter(Boolean).join('\n\n');
   }
 
   /**
@@ -837,7 +836,15 @@ export class ReviewService {
 
     // Build markdown
     const overview = buildOverview(review);
-    const markdown = buildMarkdownReport(overview, criticalFindings, suggestions, pairAgreementNotes, debateNotes, recommendation);
+    const markdown = buildMarkdownReport(
+      review,
+      overview,
+      criticalFindings,
+      suggestions,
+      pairAgreementNotes,
+      debateNotes,
+      recommendation,
+    );
 
     const report: ReviewReport = {
       overview,
@@ -874,13 +881,18 @@ export class ReviewService {
     const basePrompt = this.buildAgentPrompt(agentRole, review, providerLabel);
 
     if (!hasCodebaseAccess) {
-      return basePrompt + '\n\nNote: Analyze ONLY the diff provided. Note when your analysis would benefit from broader codebase context.\n';
+      if (review.target.kind === 'pull-request') {
+        return basePrompt + '\n\nNote: Analyze ONLY the diff provided. Note when your analysis would benefit from broader codebase context.\n';
+      }
+      return basePrompt;
     }
 
     const codebaseInstructions = provider === 'claude'
       ? [
           '',
-          'CODEBASE ACCESS: You have full access to the repository at the PR\'s HEAD commit.',
+          review.target.kind === 'pull-request'
+            ? 'CODEBASE ACCESS: You have full access to the repository at the PR\'s HEAD commit.'
+            : 'CODEBASE ACCESS: You have full access to the repository checkout that contains the design-doc artifacts.',
           'Use Read, Grep, and Glob tools to explore beyond the diff when needed:',
           '- Check how modified functions are called elsewhere',
           '- Verify whether upstream sanitization or validation exists',
@@ -890,7 +902,9 @@ export class ReviewService {
         ].join('\n')
       : [
           '',
-          'CODEBASE ACCESS: You have full access to the repository at the PR\'s HEAD commit.',
+          review.target.kind === 'pull-request'
+            ? 'CODEBASE ACCESS: You have full access to the repository at the PR\'s HEAD commit.'
+            : 'CODEBASE ACCESS: You have full access to the repository checkout that contains the design-doc artifacts.',
           'Read files beyond the diff when needed:',
           '- Check how modified functions are called elsewhere',
           '- Verify whether upstream sanitization or validation exists',
@@ -906,7 +920,7 @@ export class ReviewService {
   // ==========================================================================
 
   /**
-   * Persist review artifacts to <project>/.claude/reviews/<owner>-<repo>-<pr>-<timestamp>/
+   * Persist review artifacts to ~/.claude/reviews/<owner>-<repo>-<pr>-<timestamp>/
    * so Codex can open them inside the active workspace sandbox.
    */
   persistArtifacts(
@@ -915,7 +929,7 @@ export class ReviewService {
     reportMarkdown: string,
   ): string {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const dirName = `${review.pr.owner}-${review.pr.repo}-${review.pr.number}-${timestamp}`;
+    const dirName = `${this.getArtifactPrefix(review)}-${timestamp}`;
     const reviewDir = path.join(this.reviewsDir, dirName);
     fs.mkdirSync(reviewDir, { recursive: true });
 
@@ -951,11 +965,16 @@ export class ReviewService {
     agentOutputs: Map<string, string>,
     reportMarkdown: string,
   ): string {
-    const { metadata, pr } = review;
+    const { content } = review;
     const parts: string[] = [
-      `You are the Queen Reviewer for PR #${pr.number} in ${pr.owner}/${pr.repo}.`,
-      `Title: ${metadata.title} | Author: ${metadata.author} | Branch: ${metadata.headBranch} -> ${metadata.baseBranch}`,
-      `Changes: +${metadata.additions}/-${metadata.deletions} across ${metadata.changedFiles.length} files`,
+      `You are the Queen Reviewer for ${review.target.label}.`,
+      `Title: ${content.title} | Author: ${content.author}`,
+      `Source: ${content.source}`,
+      content.baseBranch || content.headBranch
+        ? `Branches: ${content.headBranch || '(unknown)'} -> ${content.baseBranch || '(unknown)'}`
+        : '',
+      `Changes: +${content.additions}/-${content.deletions} across ${content.changedFiles.length} files`,
+      review.customPrompt ? `Custom Review Prompt: ${review.customPrompt}` : '',
       '',
       'The review has already been completed. Below are the full findings from all agents',
       'and the compiled report. The user wants to discuss the findings, ask follow-up',
@@ -985,6 +1004,98 @@ export class ReviewService {
     parts.push(reportMarkdown);
 
     return parts.join('\n');
+  }
+
+  private normalizeReview(review: ReviewContext & { metadata?: ReviewContent }): ReviewContext {
+    if (review.target && review.content) {
+      return review;
+    }
+
+    const pr = review.pr;
+    const content = review.content || review.metadata;
+    if (!content) {
+      throw new Error('Review is missing content metadata');
+    }
+
+    return {
+      ...review,
+      target: review.target || (pr ? this.buildPRTarget(pr) : {
+        kind: 'design-doc',
+        label: review.id,
+        slug: review.id,
+      }),
+      content,
+      pr,
+    };
+  }
+
+  private buildPRTarget(pr: PRIdentifier): ReviewTarget {
+    return {
+      kind: 'pull-request',
+      label: `${pr.owner}/${pr.repo}#${pr.number}`,
+      slug: `${pr.owner}-${pr.repo}-${pr.number}`,
+      description: pr.url,
+    };
+  }
+
+  private getArtifactPrefix(review: ReviewContext): string {
+    if (review.pr) {
+      return `${review.pr.owner}-${review.pr.repo}-${review.pr.number}`;
+    }
+    return review.target.slug || review.id;
+  }
+
+  private getReviewLocator(review: ReviewContext): string {
+    if (review.pr) {
+      return `${review.pr.owner}/${review.pr.repo}#${review.pr.number}`;
+    }
+    return review.target.label;
+  }
+
+  private buildReviewPromptContext(review: ReviewContext): string {
+    const { content, target } = review;
+    const sections: string[] = [
+      `You are reviewing ${target.kind === 'pull-request' ? 'a pull request' : 'a design document'}.`,
+      `Target: ${target.label}`,
+      `Title: ${content.title}`,
+      `Author: ${content.author}`,
+      `Source: ${content.source}`,
+      content.baseBranch || content.headBranch
+        ? `Branch: ${content.headBranch || '(unknown)'} -> ${content.baseBranch || '(unknown)'}`
+        : '',
+      `Changes: +${content.additions}/-${content.deletions} across ${content.changedFiles.length} files`,
+      '',
+    ];
+
+    if (content.changedFiles.length > 0) {
+      sections.push('Changed files:');
+      sections.push(
+        content.changedFiles
+          .map((file) => `  ${file.status} ${file.path} (+${file.additions}/-${file.deletions})`)
+          .join('\n'),
+      );
+      sections.push('');
+    }
+
+    sections.push(target.kind === 'pull-request' ? 'Review Description:' : 'Review Content Summary:');
+    sections.push(content.body || '(none)');
+
+    if (content.documents.length > 0) {
+      sections.push('');
+      sections.push('Documents:');
+      for (const document of content.documents) {
+        sections.push(`### ${document.label}`);
+        if (document.path) sections.push(`Path: ${document.path}`);
+        sections.push(document.content.slice(0, 60000));
+        sections.push('');
+      }
+    } else if (content.diff) {
+      sections.push('');
+      sections.push('Diff:');
+      sections.push(content.diff.slice(0, 50000));
+    }
+
+    return sections.filter(Boolean).join('\n');
   }
 
   // ==========================================================================
@@ -1075,35 +1186,32 @@ function extractDiffFiles(diff: string): Map<string, string> {
   return result;
 }
 
-function mapFileStatus(status?: string): 'added' | 'modified' | 'deleted' | 'renamed' {
-  switch (status?.toLowerCase()) {
-    case 'added':
-    case 'a':
-      return 'added';
-    case 'deleted':
-    case 'd':
-    case 'removed':
-      return 'deleted';
-    case 'renamed':
-    case 'r':
-      return 'renamed';
-    default:
-      return 'modified';
-  }
+function isPRIdentifier(value: ReviewTarget | PRIdentifier): value is PRIdentifier {
+  return 'owner' in value && 'repo' in value && 'number' in value;
 }
 
 function buildOverview(review: ReviewContext): string {
-  const { metadata, pr } = review;
-  const fileCount = metadata.changedFiles.length;
+  const { content, target } = review;
+  const fileCount = content.changedFiles.length;
+
+  if (target.kind === 'pull-request' && review.pr) {
+    return (
+      `PR #${review.pr.number} "${content.title}" by ${content.author} ` +
+      `changes ${fileCount} file${fileCount !== 1 ? 's' : ''} ` +
+      `(+${content.additions}/-${content.deletions}) ` +
+      `merging ${content.headBranch} into ${content.baseBranch}.`
+    );
+  }
+
   return (
-    `PR #${pr.number} "${metadata.title}" by ${metadata.author} ` +
-    `changes ${fileCount} file${fileCount !== 1 ? 's' : ''} ` +
-    `(+${metadata.additions}/-${metadata.deletions}) ` +
-    `merging ${metadata.headBranch} into ${metadata.baseBranch}.`
+    `${target.label} "${content.title}" by ${content.author} ` +
+    `includes ${content.documents.length} document${content.documents.length !== 1 ? 's' : ''} ` +
+    `and ${fileCount} tracked file${fileCount !== 1 ? 's' : ''}.`
   );
 }
 
 function buildMarkdownReport(
+  review: ReviewContext,
   overview: string,
   critical: Finding[],
   suggestions: Finding[],
@@ -1111,8 +1219,11 @@ function buildMarkdownReport(
   debateNotes: string[],
   recommendation: ReviewRecommendation,
 ): string {
+  const reportTitle = review.target.kind === 'pull-request'
+    ? '# AI Consortium PR Review'
+    : '# AI Consortium Design Doc Review';
   const lines: string[] = [
-    '# AI Consortium PR Review',
+    reportTitle,
     '',
     '## Overview',
     overview,

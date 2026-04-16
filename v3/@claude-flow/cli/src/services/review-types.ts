@@ -1,8 +1,8 @@
 /**
- * PR Review Orchestration Types
+ * Review Orchestration Types
  *
- * All TypeScript interfaces for dual-model multi-agent PR review
- * with pair agreement and debate/consensus loop.
+ * Shared interfaces for PR review and design-doc review with
+ * pair agreement and debate/consensus loop.
  */
 
 import * as os from 'os';
@@ -18,6 +18,9 @@ export interface PRIdentifier {
   number: number;
   url: string;
 }
+
+export type ReviewSourceKind = 'pr' | 'pr-markdown' | 'local-file' | 'slack';
+export type ReviewTargetKind = 'pull-request' | 'design-doc';
 
 // ============================================================================
 // Enums / Union Types
@@ -57,16 +60,48 @@ export interface ChangedFile {
   status: 'added' | 'modified' | 'deleted' | 'renamed';
 }
 
-export interface PRMetadata {
+export interface ReviewDocument {
+  label: string;
+  path?: string;
+  content: string;
+}
+
+export interface ReviewContent {
+  source: ReviewSourceKind;
   title: string;
   body: string;
   author: string;
-  baseBranch: string;
-  headBranch: string;
-  diff: string;
+  summary: string;
+  baseBranch?: string;
+  headBranch?: string;
+  diff?: string;
   changedFiles: ChangedFile[];
   additions: number;
   deletions: number;
+  documents: ReviewDocument[];
+}
+
+export type PRMetadata = ReviewContent;
+
+export interface ReviewTarget {
+  kind: ReviewTargetKind;
+  label: string;
+  slug: string;
+  description?: string;
+}
+
+export interface FetchReviewContentRequest {
+  source: ReviewSourceKind;
+  input?: string;
+  pr?: PRIdentifier;
+  repoPath?: string;
+  worktreePath?: string;
+}
+
+export interface FetchReviewContentResult {
+  target: ReviewTarget;
+  content: ReviewContent;
+  pr?: PRIdentifier;
 }
 
 // ============================================================================
@@ -152,14 +187,16 @@ export interface ReviewReport {
 
 export interface ReviewContext {
   id: string;
-  pr: PRIdentifier;
-  metadata: PRMetadata;
+  target: ReviewTarget;
+  content: ReviewContent;
+  pr?: PRIdentifier;
   status: ReviewStatus;
   worktreePath?: string;
   agentFindings: AgentFindings[];
   pairAgreements: PairAgreement[];
   debates: DebateRound[];
   report?: ReviewReport;
+  customPrompt?: string;
   config: ReviewConfig;
   createdAt: string;
   updatedAt: string;

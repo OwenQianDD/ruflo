@@ -26,9 +26,11 @@ function makePR(): PRIdentifier {
 
 function makeMetadata(): PRMetadata {
   return {
+    source: 'pr',
     title: 'Add user authentication',
     body: 'Implements OAuth2 login flow',
     author: 'test-user',
+    summary: 'Add user authentication Implements OAuth2 login flow',
     baseBranch: 'main',
     headBranch: 'feature/auth',
     diff: '--- a/src/auth.ts\n+++ b/src/auth.ts\n@@ -1,3 +1,10 @@\n+function login() {}',
@@ -38,6 +40,7 @@ function makeMetadata(): PRMetadata {
     ],
     additions: 15,
     deletions: 2,
+    documents: [],
   };
 }
 
@@ -74,13 +77,17 @@ function makeAgentFindings(agent: string, findings: Finding[]): AgentFindings {
 describe('ReviewService', () => {
   let tmpDir: string;
   let service: ReviewService;
+  let originalHome: string | undefined;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-test-'));
+    originalHome = process.env.HOME;
+    process.env.HOME = tmpDir;
     service = createReviewService(tmpDir);
   });
 
   afterEach(() => {
+    process.env.HOME = originalHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -119,7 +126,7 @@ describe('ReviewService', () => {
       const loaded = service.getReview(review.id);
       expect(loaded).not.toBeNull();
       expect(loaded!.id).toBe(review.id);
-      expect(loaded!.metadata.title).toBe('Add user authentication');
+      expect(loaded!.content.title).toBe('Add user authentication');
     });
 
     it('returns null for nonexistent review', async () => {
@@ -427,6 +434,42 @@ describe('ReviewService', () => {
       expect(report.markdown).toContain('# AI Consortium PR Review');
       expect(report.markdown).toContain('## Overview');
       expect(report.markdown).toContain('## Final Recommendation');
+    });
+  });
+
+  describe('design doc review prompts', () => {
+    it('includes the custom prompt for non-PR review content', async () => {
+      await service.initialize();
+      const review = service.createReview(
+        {
+          kind: 'design-doc',
+          label: 'Local design doc auth-rollout',
+          slug: 'auth-rollout',
+        },
+        {
+          source: 'local-file',
+          title: 'Auth Rollout Design',
+          body: '# Auth Rollout Design\n\nRoll out auth in three phases.',
+          author: 'local-file',
+          summary: 'Auth rollout design',
+          changedFiles: [],
+          additions: 0,
+          deletions: 0,
+          documents: [{
+            label: 'auth-rollout.md',
+            path: '/tmp/auth-rollout.md',
+            content: '# Auth Rollout Design\n\nRoll out auth in three phases.',
+          }],
+        },
+        undefined,
+        undefined,
+        'Focus on rollout risk and missing observability.',
+      );
+
+      const prompt = service.buildAgentPrompt('integration-specialist', review);
+      expect(prompt).toContain('design document');
+      expect(prompt).toContain('Focus on rollout risk and missing observability.');
+      expect(prompt).toContain('Auth Rollout Design');
     });
   });
 

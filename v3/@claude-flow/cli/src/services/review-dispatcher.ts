@@ -237,7 +237,9 @@ export class ReviewDispatcher extends EventEmitter {
         `  Description: ${finding.description}`,
         `  Suggestion: ${finding.suggestion || '(none)'}`,
         '',
-        `PR context: #${review.pr.number} "${review.metadata.title}" in ${review.pr.owner}/${review.pr.repo}`,
+        `Review target: ${review.target.label}`,
+        `Review title: ${review.content.title}`,
+        review.customPrompt ? `Custom review prompt: ${review.customPrompt}` : '',
         '',
         'As the ' + role + ', evaluate this finding from your specialty.',
         'Respond with JSON:',
@@ -306,8 +308,8 @@ export class ReviewDispatcher extends EventEmitter {
       promptParts.push(this.buildSingleModeQueenHeader());
     }
 
-    // PR context
-    promptParts.push(this.buildPRContext(review));
+    // Review context
+    promptParts.push(this.buildReviewContext(review));
 
     // Pair agreement summary (if dual mode)
     if (dualMode && pairAgreements.length > 0) {
@@ -478,8 +480,8 @@ export class ReviewDispatcher extends EventEmitter {
   }
 
   private buildDualModeQueenHeader(): string {
-    return `You are the Queen Reviewer running a dual-model AI Consortium PR Review.
-Agents from two model families (Claude Opus and Codex GPT 5.4) independently reviewed the same PR.
+    return `You are the Queen Reviewer running a dual-model AI Consortium review.
+Agents from two model families (Claude Opus and Codex GPT 5.4) independently reviewed the same input.
 Each role was assigned to both models. Your job:
 
 1. PAIR AGREEMENT: For each role (Security, Logic, Integration), compare Claude vs Codex findings.
@@ -493,7 +495,7 @@ Each role was assigned to both models. Your job:
 
 3. COMPILE REPORT in this exact format:
 
-   # AI Consortium PR Review (Dual-Model)
+   # AI Consortium Review (Dual-Model)
 
    ## Overview
    2-3 sentence summary
@@ -526,15 +528,15 @@ Each role was assigned to both models. Your job:
   }
 
   private buildSingleModeQueenHeader(): string {
-    return `You are the Queen Reviewer running an AI Consortium PR Review.
-Specialist agents have independently reviewed a PR. Your job:
+    return `You are the Queen Reviewer running an AI Consortium review.
+Specialist agents have independently reviewed the same input. Your job:
 
 1. Compare findings across agents and resolve disagreements
 2. Compile a triaged report with concrete suggested fixes for every finding
 
 Format:
 
-   # AI Consortium PR Review
+   # AI Consortium Review
 
    ## Overview
    2-3 sentence summary
@@ -562,15 +564,34 @@ Print ONLY the report.
 `;
   }
 
-  private buildPRContext(review: ReviewContext): string {
-    const { metadata, pr } = review;
+  private buildReviewContext(review: ReviewContext): string {
+    const { content, target } = review;
+    const documentSections = content.documents.length > 0
+      ? content.documents
+          .map((document) => [
+            `### ${document.label}`,
+            document.path ? `Path: ${document.path}` : '',
+            document.content.slice(0, 60000),
+          ].filter(Boolean).join('\n'))
+          .join('\n\n')
+      : '';
+
     return `
-## PR Context
-- PR: #${pr.number} in ${pr.owner}/${pr.repo}
-- Title: ${metadata.title}
-- Author: ${metadata.author}
-- Branch: ${metadata.headBranch} -> ${metadata.baseBranch}
-- Changes: +${metadata.additions}/-${metadata.deletions} across ${metadata.changedFiles.length} files
+## Review Context
+- Target: ${target.label}
+- Kind: ${target.kind}
+- Source: ${content.source}
+- Title: ${content.title}
+- Author: ${content.author}
+${content.baseBranch || content.headBranch ? `- Branch: ${content.headBranch || '(unknown)'} -> ${content.baseBranch || '(unknown)'}` : ''}
+- Changes: +${content.additions}/-${content.deletions} across ${content.changedFiles.length} files
+${review.customPrompt ? `- Custom Review Prompt: ${review.customPrompt}` : ''}
+
+## Source Summary
+${content.summary || content.body || '(none)'}
+
+${documentSections ? `## Source Documents\n${documentSections}\n` : ''}
+${content.diff ? `## Source Diff\n${content.diff.slice(0, 60000)}\n` : ''}
 `;
   }
 }

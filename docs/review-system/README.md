@@ -1,6 +1,6 @@
-# PR Review System
+# Review System
 
-This repository includes a local multi-agent PR review workflow backed by the Ruflo CLI.
+This repository includes a local multi-agent review workflow backed by the Ruflo CLI.
 
 The canonical entrypoints are:
 
@@ -42,6 +42,31 @@ Direct CLI:
 ruflo-dev review init --url https://github.com/OwenQianDD/ruflo/pull/1
 ```
 
+Markdown design docs from a PR:
+
+```bash
+ruflo-dev review init --source pr-markdown --url https://github.com/OwenQianDD/ruflo/pull/1
+```
+
+Local design doc file:
+
+```bash
+ruflo-dev review init --source local-file --input ./docs/design.md
+```
+
+Slack thread export:
+
+```bash
+ruflo-dev review init --source slack --input ./tmp/design-thread.json
+```
+
+Custom review prompt:
+
+```bash
+ruflo-dev review init --source local-file --input ./docs/design.md \
+  --review-prompt "Focus on rollout safety, observability, and unresolved assumptions."
+```
+
 Fast Codex-only review:
 
 ```bash
@@ -57,6 +82,9 @@ ruflo-dev review init --owner OwenQianDD --repo ruflo --pr 1
 ## Useful flags
 
 - `--fast`: run the three review agents on Codex only and skip debate plus queen reconciliation
+- `--source <pr|pr-markdown|local-file|slack>`: choose how review content is fetched
+- `--input <value>`: source-specific input for design-doc reviews
+- `--review-prompt <text>`: add custom review instructions to all specialist agents and the coordinator
 - `--claude-only`: skip Codex agents
 - `--skip-worktree`: diff-only mode, no isolated worktree
 - `--skip-debate`: skip the disagreement debate loop
@@ -78,9 +106,9 @@ RECONCILE_BUDGET
 
 `review init` runs a staged pipeline:
 
-1. Validates the local repository clone
-2. Pulls PR metadata and diff from GitHub
-3. Creates an isolated worktree unless `--skip-worktree` is set
+1. Resolves the requested review source
+2. Fetches review content through a common source adapter
+3. Creates an isolated worktree when the source needs repository context
 4. Dispatches specialist reviewers
 5. Runs pair agreement when both Claude and Codex are available
 6. Resolves disagreements through a debate loop

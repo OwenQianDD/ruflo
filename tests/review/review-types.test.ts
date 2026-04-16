@@ -91,6 +91,7 @@ describe('DEFAULT_REVIEW_CONFIG', () => {
   });
 
   it('uses opus for security auditor', () => {
-    expect(DEFAULT_REVIEW_CONFIG.providers.securityAuditor.model).toBe('opus');
+    expect(DEFAULT_REVIEW_CONFIG.providers.securityAuditor.claude.model).toBe('opus');
+    expect(DEFAULT_REVIEW_CONFIG.providers.securityAuditor.codex.model).toBe('gpt-5.4');
   });
 });
