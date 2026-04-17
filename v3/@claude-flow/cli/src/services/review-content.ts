@@ -41,7 +41,7 @@ function fetchPullRequestContent(
     source: 'pr',
     title: raw.title || '',
     body: raw.body || '',
-    author: raw.author?.login || raw.author || '',
+    author: resolveAuthor(raw.author),
     summary: buildSummary(raw.title || '', raw.body || ''),
     baseBranch: raw.baseRefName || 'main',
     headBranch: raw.headRefName || '',
@@ -98,7 +98,7 @@ function fetchPullRequestMarkdownContent(
     body: documents
       .map((document) => `## ${document.label}\n\n${document.content.trim()}`)
       .join('\n\n'),
-    author: raw.author?.login || raw.author || '',
+    author: resolveAuthor(raw.author),
     summary: buildSummary(raw.title || '', raw.body || ''),
     baseBranch: raw.baseRefName || 'main',
     headBranch: raw.headRefName || '',
@@ -255,6 +255,12 @@ function fetchPullRequestData(
   }
 
   return { ...raw, diff };
+}
+
+function resolveAuthor(author: { login?: string } | string | undefined): string {
+  if (!author) return '';
+  if (typeof author === 'string') return author;
+  return author.login || '';
 }
 
 function mapChangedFiles(

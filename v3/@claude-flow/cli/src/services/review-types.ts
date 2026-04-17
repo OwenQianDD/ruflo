@@ -21,6 +21,7 @@ export interface PRIdentifier {
 
 export type ReviewSourceKind = 'pr' | 'pr-markdown' | 'local-file' | 'slack';
 export type ReviewTargetKind = 'pull-request' | 'design-doc';
+export type ReviewProfile = 'code-review' | 'system-design';
 
 // ============================================================================
 // Enums / Union Types
@@ -189,6 +190,7 @@ export interface ReviewContext {
   id: string;
   target: ReviewTarget;
   content: ReviewContent;
+  profile?: ReviewProfile;
   pr?: PRIdentifier;
   status: ReviewStatus;
   worktreePath?: string;
@@ -295,7 +297,11 @@ export const DEFAULT_REVIEW_CONFIG: ReviewConfig = {
 // Agent Dispatch Types
 // ============================================================================
 
-export type AgentRole = 'security-auditor' | 'logic-checker' | 'integration-specialist';
+export type AgentRole =
+  | 'security-auditor'
+  | 'logic-checker'
+  | 'integration-specialist'
+  | 'system-architect';
 
 export interface AgentProcess {
   role: string;
@@ -335,6 +341,17 @@ export const DEFAULT_DISPATCH_CONFIG: DispatchConfig = {
   logFile: '',
   dualMode: true,
 };
+
+export function getReviewProfile(target: ReviewTarget): ReviewProfile {
+  return target.kind === 'design-doc' ? 'system-design' : 'code-review';
+}
+
+export function getAgentRolesForProfile(profile: ReviewProfile): AgentRole[] {
+  if (profile === 'system-design') {
+    return ['system-architect'];
+  }
+  return ['security-auditor', 'logic-checker', 'integration-specialist'];
+}
 
 // ============================================================================
 // Parsing

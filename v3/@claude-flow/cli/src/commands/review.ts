@@ -29,7 +29,6 @@ import type {
   ReviewStatus,
   PRIdentifier,
   PRCommentThread,
-  AgentRole,
   DispatchConfig,
   ModelProvider,
   Finding,
@@ -571,10 +570,11 @@ async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> 
 
   // Step 5: Select providers and optional reconciliation path
   const dispatcher = createReviewDispatcher(dispatchConfig);
+  const roles = service.getAgentRoles(review);
   const codexAvailable = dispatcher.isCodexAvailable();
   const codexOnly = fast;
   const dualMode = !codexOnly && !claudeOnly && codexAvailable;
-  const runDebate = !skipDebate && !fast;
+  const runDebate = !skipDebate && !fast && roles.length > 1;
   const runReconciliation = !fast;
   const providers: ModelProvider[] = codexOnly
     ? ['codex']
@@ -593,7 +593,7 @@ async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> 
 
   if (codexOnly) {
     output.writeln(output.bold('Agent Dispatch (Fast Mode: Codex-Only)'));
-    output.writeln('  3 specialist agents run on Codex only; debate and queen reconciliation are skipped.');
+    output.writeln(`  ${roles.length} specialist agent${roles.length === 1 ? '' : 's'} run on Codex only; debate and queen reconciliation are skipped.`);
   } else if (dualMode) {
     output.writeln(output.bold('Agent Dispatch (Dual-Model: Opus + Codex GPT 5.4)'));
     output.writeln('  Each role runs independently on both models:');
@@ -603,12 +603,11 @@ async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> 
     } else {
       output.writeln(output.bold('Agent Dispatch (Claude-Only — Codex CLI not found)'));
     }
-    output.writeln('  3 specialist agents:');
+    output.writeln(`  ${roles.length} specialist agent${roles.length === 1 ? '' : 's'}:`);
   }
   output.writeln();
 
   // Step 6: Build prompt files
-  const roles: AgentRole[] = ['security-auditor', 'logic-checker', 'integration-specialist'];
   const tmpDir = fs.mkdtempSync(path.join(
     process.env.TMPDIR || '/tmp',
     'review-',
@@ -732,6 +731,9 @@ async function runReviewPipeline(opts: PipelineOptions): Promise<CommandResult> 
       output.writeln();
       output.writeln(output.dim('  No disputed findings — skipping debate loop'));
     }
+  } else if (roles.length < 2 && !fast) {
+    output.writeln();
+    output.writeln(output.dim('  Debate loop skipped: system-design profile uses a single architect role and resolves in queen reconciliation.'));
   } else if (fast) {
     output.writeln();
     output.writeln(output.dim('  Fast mode enabled — skipping debate loop'));

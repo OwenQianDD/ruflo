@@ -30,8 +30,13 @@ import type {
   PRDelta,
   PRCommentThread,
   ReviewTarget,
+  AgentRole,
 } from './review-types.js';
-import { DEFAULT_REVIEW_CONFIG } from './review-types.js';
+import {
+  DEFAULT_REVIEW_CONFIG,
+  getAgentRolesForProfile,
+  getReviewProfile,
+} from './review-types.js';
 import { fetchReviewContent as fetchReviewContentFromSource } from './review-content.js';
 
 // ============================================================================
@@ -172,11 +177,13 @@ export class ReviewService {
       ? this.buildPRTarget(targetOrPR)
       : targetOrPR;
     const resolvedPR = isPRIdentifier(targetOrPR) ? targetOrPR : pr;
+    const profile = getReviewProfile(target);
 
     const review: ReviewContext = {
       id: randomUUID(),
       target,
       content,
+      profile,
       pr: resolvedPR,
       status: 'initializing',
       worktreePath,
@@ -287,6 +294,10 @@ export class ReviewService {
     ) || null;
   }
 
+  getAgentRoles(review: ReviewContext): AgentRole[] {
+    return getAgentRolesForProfile(review.profile || getReviewProfile(review.target));
+  }
+
   saveReview(review: ReviewContext): void {
     review.updatedAt = new Date().toISOString();
     const filePath = path.join(this.reviewsDir, `${review.id}.json`);
@@ -344,7 +355,7 @@ export class ReviewService {
    * The actual agent spawning is done by the CLI command via Task tool.
    */
   buildAgentPrompt(
-    agentRole: 'security-auditor' | 'logic-checker' | 'integration-specialist',
+    agentRole: AgentRole,
     review: ReviewContext,
     providerLabel?: string
   ): string {
@@ -379,6 +390,16 @@ export class ReviewService {
         review.target.kind === 'pull-request'
           ? 'Focus on: Breaking API changes, architectural drift, cross-module impact, dependency changes, migration safety.'
           : 'Focus on: system boundaries, dependency impact, rollout, migration safety, operability, observability, and compatibility with existing systems.',
+        fixInstructions,
+        'Return your findings as JSON matching the AgentFindings interface.',
+      ].join('\n'),
+      'system-architect': [
+        'Use skill: $agent-arch-system-design.',
+        'You are acting as a high-signal big-tech system design interviewer reviewing this proposal for architecture quality.',
+        'Focus on: API design, concurrency control, scaling strategy, bottlenecks, queues, rate limiting, backpressure, storage design, reliability, fault tolerance, observability, cost, and operational simplicity.',
+        'Assess whether the design demonstrates E4, E5, E6, or E7 level systems thinking. Be explicit about the highest level the design credibly supports and why.',
+        'The summary MUST include four items: overall read, strongest aspects, biggest gaps, and a final level assessment.',
+        'Findings should prioritize the most interview-relevant gaps, not stylistic nits.',
         fixInstructions,
         'Return your findings as JSON matching the AgentFindings interface.',
       ].join('\n'),
@@ -605,7 +626,8 @@ export class ReviewService {
    * Agent names are expected as "{role}-claude" and "{role}-codex".
    */
   runPairAgreement(review: ReviewContext): PairAgreement[] {
-    const roles = ['security-auditor', 'logic-checker', 'integration-specialist'];
+    const roles = this.getAgentRoles(review);
+    const systemDesign = (review.profile || getReviewProfile(review.target)) === 'system-design';
     const severityRank: Record<FindingSeverity, number> = {
       critical: 4, high: 3, medium: 2, low: 1, info: 0,
     };
@@ -625,9 +647,7 @@ export class ReviewService {
         const match = codexAF.findings.find(
           xf =>
             !matchedCodexIds.has(xf.id) &&
-            xf.file === cf.file &&
-            xf.file !== undefined &&
-            Math.abs(severityRank[xf.severity] - severityRank[cf.severity]) <= 1
+            findingsPairAgree(cf, xf, severityRank, systemDesign)
         );
         if (match) {
           matchedCodexIds.add(match.id);
@@ -836,15 +856,25 @@ export class ReviewService {
 
     // Build markdown
     const overview = buildOverview(review);
-    const markdown = buildMarkdownReport(
-      review,
-      overview,
-      criticalFindings,
-      suggestions,
-      pairAgreementNotes,
-      debateNotes,
-      recommendation,
-    );
+    const markdown = (review.profile || getReviewProfile(review.target)) === 'system-design'
+      ? buildSystemDesignMarkdownReport(
+          review,
+          overview,
+          criticalFindings,
+          suggestions,
+          pairAgreementNotes,
+          debateNotes,
+          recommendation,
+        )
+      : buildMarkdownReport(
+          review,
+          overview,
+          criticalFindings,
+          suggestions,
+          pairAgreementNotes,
+          debateNotes,
+          recommendation,
+        );
 
     const report: ReviewReport = {
       overview,
@@ -869,7 +899,7 @@ export class ReviewService {
    * Build an agent prompt with provider-specific codebase-access instructions.
    */
   buildAgentPromptForProvider(
-    agentRole: 'security-auditor' | 'logic-checker' | 'integration-specialist',
+    agentRole: AgentRole,
     review: ReviewContext,
     provider: ModelProvider,
     hasCodebaseAccess: boolean,
@@ -1025,6 +1055,11 @@ export class ReviewService {
         slug: review.id,
       }),
       content,
+      profile: review.profile || getReviewProfile(review.target || (pr ? this.buildPRTarget(pr) : {
+        kind: 'design-doc',
+        label: review.id,
+        slug: review.id,
+      })),
       pr,
     };
   }
@@ -1304,6 +1339,450 @@ function buildMarkdownReport(
   lines.push('## Final Recommendation', recLabel, '');
 
   return lines.join('\n');
+}
+
+function findingsPairAgree(
+  left: Finding,
+  right: Finding,
+  severityRank: Record<FindingSeverity, number>,
+  systemDesign: boolean,
+): boolean {
+  if (Math.abs(severityRank[right.severity] - severityRank[left.severity]) > 1) {
+    return false;
+  }
+
+  if (left.file && right.file && left.file === right.file) {
+    return true;
+  }
+
+  if (!systemDesign) {
+    return false;
+  }
+
+  const titleSimilarity = normalizedTokenOverlap(left.title, right.title);
+  const descriptionSimilarity = normalizedTokenOverlap(left.description, right.description);
+
+  return (
+    titleSimilarity >= 0.4 ||
+    (left.category === right.category && titleSimilarity >= 0.25) ||
+    descriptionSimilarity >= 0.35
+  );
+}
+
+type DesignLevel = 'E4' | 'E5' | 'E6' | 'E7';
+type DesignConfidence = 'high' | 'medium' | 'low';
+
+interface ParsedDesignSummary {
+  overallRead?: string;
+  strengths: string[];
+  gaps: string[];
+  level?: DesignLevel;
+  confidence?: DesignConfidence;
+  rationale?: string;
+  hiringRecommendation?: string;
+}
+
+function buildSystemDesignMarkdownReport(
+  review: ReviewContext,
+  overview: string,
+  critical: Finding[],
+  suggestions: Finding[],
+  pairAgreementNotes: string[],
+  debateNotes: string[],
+  recommendation: ReviewRecommendation,
+): string {
+  const summaries = review.agentFindings.map(agent => parseDesignSummary(agent.summary));
+  const strengths = dedupeStrings(
+    summaries.flatMap(summary => summary.strengths),
+  ).slice(0, 5);
+  const topGaps = dedupeStrings([
+    ...summaries.flatMap(summary => summary.gaps),
+    ...rankDesignFindings(critical, suggestions).map(finding => finding.title),
+  ]).slice(0, 6);
+
+  const levelAssessment = deriveDesignLevelAssessment(summaries, critical, suggestions);
+  const hiringRecommendation = deriveDesignHiringRecommendation(
+    levelAssessment.level,
+    recommendation,
+    critical,
+  );
+  const executiveSummary = summaries
+    .map(summary => summary.overallRead)
+    .find(Boolean)
+    || buildDesignExecutiveSummary(review, levelAssessment.level, critical, suggestions);
+
+  const scalabilityFindings = selectDesignFindings(
+    critical,
+    suggestions,
+    ['concurrency', 'throughput', 'latency', 'queue', 'batch', 'backpressure', 'rate limit', 'hot shard', 'fanout', 'scal'],
+    ['performance', 'integration'],
+  );
+  const reliabilityFindings = selectDesignFindings(
+    critical,
+    suggestions,
+    ['reliab', 'failure', 'retry', 'observab', 'rollout', 'cost', 'debug', 'operat', 'resilien', 'degrad'],
+    ['security', 'integration', 'other'],
+  );
+
+  const lines: string[] = [
+    '# AI Consortium System Design Review',
+    '',
+    '## Executive Summary',
+    executiveSummary,
+    '',
+    '## Architecture Strengths',
+  ];
+
+  if (strengths.length > 0) {
+    for (const strength of strengths) {
+      lines.push(`- ${strength}`);
+    }
+  } else {
+    lines.push('- The proposal shows intent to handle concurrency and throughput explicitly, but the strongest decisions were not articulated clearly enough to stand out.');
+  }
+  lines.push('');
+
+  lines.push('## Critical Gaps');
+  if (topGaps.length > 0) {
+    for (const gap of topGaps) {
+      lines.push(`- ${gap}`);
+    }
+  } else {
+    lines.push('- No major architectural gaps were surfaced by the review agents.');
+  }
+  lines.push('');
+
+  lines.push('## Scalability And Concurrency Review');
+  lines.push(
+    scalabilityFindings.length > 0
+      ? formatDesignFindingParagraph(
+          'The review highlights the main concurrency and scaling risks as',
+          scalabilityFindings,
+        )
+      : 'The design does not yet make the throughput model, bottleneck assumptions, or backpressure strategy concrete enough to support a strong concurrency assessment.',
+  );
+  lines.push('');
+
+  lines.push('## Reliability And Operations Review');
+  lines.push(
+    reliabilityFindings.length > 0
+      ? formatDesignFindingParagraph(
+          'Operationally, the highest-signal concerns are',
+          reliabilityFindings,
+        )
+      : 'The proposal needs a clearer stance on failure handling, observability, rollout safety, and oncall/debugging ergonomics.',
+  );
+  lines.push('');
+
+  if (pairAgreementNotes.length > 0) {
+    lines.push('## Cross-Model Notes');
+    for (const note of pairAgreementNotes) {
+      lines.push(`- ${note}`);
+    }
+    if (debateNotes.length > 0) {
+      for (const note of debateNotes.slice(0, 3)) {
+        lines.push(`- ${note}`);
+      }
+    }
+    lines.push('');
+  }
+
+  lines.push('## Level Assessment');
+  lines.push(`- Level: ${levelAssessment.level}`);
+  lines.push(`- Confidence: ${levelAssessment.confidence}`);
+  lines.push(`- Rationale: ${levelAssessment.rationale}`);
+  lines.push('');
+
+  lines.push('## Hiring Recommendation');
+  lines.push(hiringRecommendation);
+  lines.push('');
+
+  return lines.join('\n');
+}
+
+function parseDesignSummary(summary: string): ParsedDesignSummary {
+  const lines = summary
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  const parsed: ParsedDesignSummary = {
+    strengths: [],
+    gaps: [],
+  };
+
+  let section: 'strengths' | 'gaps' | null = null;
+
+  for (const line of lines) {
+    const normalized = line.replace(/^[*\-]\s*/, '');
+    const lower = normalized.toLowerCase();
+
+    if (lower.startsWith('overall read:') || lower.startsWith('overall:') || lower.startsWith('summary:')) {
+      parsed.overallRead = normalized.split(':').slice(1).join(':').trim();
+      section = null;
+      continue;
+    }
+    if (lower.startsWith('strongest aspects:') || lower.startsWith('strengths:')) {
+      const value = normalized.split(':').slice(1).join(':').trim();
+      if (value) parsed.strengths.push(value);
+      section = 'strengths';
+      continue;
+    }
+    if (lower.startsWith('biggest gaps:') || lower.startsWith('gaps:') || lower.startsWith('weaknesses:')) {
+      const value = normalized.split(':').slice(1).join(':').trim();
+      if (value) parsed.gaps.push(value);
+      section = 'gaps';
+      continue;
+    }
+    if (lower.startsWith('level assessment:') || lower.startsWith('level:')) {
+      const value = normalized.split(':').slice(1).join(':').trim();
+      const levelMatch = value.match(/\b(E[4-7])\b/i);
+      if (levelMatch) parsed.level = levelMatch[1].toUpperCase() as DesignLevel;
+      if (/\bhigh\b/i.test(value)) parsed.confidence = 'high';
+      else if (/\blow\b/i.test(value)) parsed.confidence = 'low';
+      else if (/\bmedium\b/i.test(value)) parsed.confidence = 'medium';
+      parsed.rationale = value;
+      section = null;
+      continue;
+    }
+    if (lower.startsWith('confidence:')) {
+      const value = normalized.split(':').slice(1).join(':').trim().toLowerCase();
+      if (value === 'high' || value === 'medium' || value === 'low') {
+        parsed.confidence = value;
+      }
+      section = null;
+      continue;
+    }
+    if (lower.startsWith('rationale:')) {
+      parsed.rationale = normalized.split(':').slice(1).join(':').trim();
+      section = null;
+      continue;
+    }
+    if (lower.startsWith('hiring recommendation:')) {
+      parsed.hiringRecommendation = normalized.split(':').slice(1).join(':').trim();
+      section = null;
+      continue;
+    }
+
+    if (section === 'strengths' && /^[*\-]/.test(line)) {
+      parsed.strengths.push(normalized);
+      continue;
+    }
+    if (section === 'gaps' && /^[*\-]/.test(line)) {
+      parsed.gaps.push(normalized);
+      continue;
+    }
+
+    if (!parsed.overallRead) {
+      parsed.overallRead = normalized;
+    }
+  }
+
+  if (!parsed.level) {
+    const levelMatch = summary.match(/\b(E[4-7])\b/i);
+    if (levelMatch) parsed.level = levelMatch[1].toUpperCase() as DesignLevel;
+  }
+
+  return parsed;
+}
+
+function deriveDesignLevelAssessment(
+  summaries: ParsedDesignSummary[],
+  critical: Finding[],
+  suggestions: Finding[],
+): { level: DesignLevel; confidence: DesignConfidence; rationale: string } {
+  const levels = summaries
+    .map(summary => summary.level)
+    .filter((level): level is DesignLevel => Boolean(level));
+  const counts = new Map<DesignLevel, number>();
+
+  for (const level of levels) {
+    counts.set(level, (counts.get(level) || 0) + 1);
+  }
+
+  const rankedLevels: DesignLevel[] = ['E7', 'E6', 'E5', 'E4'];
+  const selectedLevel = rankedLevels.find(level => counts.has(level))
+    || fallbackDesignLevel(critical, suggestions);
+  const selectedCount = counts.get(selectedLevel) || 0;
+  const confidence: DesignConfidence = selectedCount >= 2
+    ? 'high'
+    : levels.length === 1
+      ? 'medium'
+      : 'low';
+  const summaryRationale = summaries
+    .find(summary => summary.level === selectedLevel && summary.rationale)
+    ?.rationale;
+  const fallbackRationale = buildDesignLevelRationale(selectedLevel, critical, suggestions);
+
+  return {
+    level: selectedLevel,
+    confidence,
+    rationale: summaryRationale || fallbackRationale,
+  };
+}
+
+function fallbackDesignLevel(critical: Finding[], suggestions: Finding[]): DesignLevel {
+  const highSignalCount = critical.length;
+  if (highSignalCount >= 4) return 'E4';
+  if (highSignalCount >= 2) return 'E5';
+  const mediumCount = suggestions.filter(finding => finding.severity === 'medium').length;
+  if (mediumCount >= 3) return 'E5';
+  return 'E6';
+}
+
+function buildDesignLevelRationale(
+  level: DesignLevel,
+  critical: Finding[],
+  suggestions: Finding[],
+): string {
+  const topTitles = rankDesignFindings(critical, suggestions)
+    .slice(0, 2)
+    .map(finding => finding.title.toLowerCase());
+  const evidence = topTitles.length > 0
+    ? `The main limiting gaps are ${topTitles.join(' and ')}.`
+    : 'The design signals were mixed and the level call is based on overall rigor rather than one decisive strength.';
+
+  if (level === 'E4') {
+    return `The proposal does not make enough of the core scaling, failure-mode, and operational tradeoffs concrete for a senior-level system design loop. ${evidence}`;
+  }
+  if (level === 'E5') {
+    return `The design shows solid instincts, but several important tradeoffs are still underspecified before it reads as staff-level systems thinking. ${evidence}`;
+  }
+  if (level === 'E6') {
+    return `The design demonstrates clear architectural structure and good systems judgment, with remaining gaps that look more like refinement than missing fundamentals. ${evidence}`;
+  }
+  return `The design demonstrates unusually strong tradeoff awareness, scaling strategy, and operational depth. ${evidence}`;
+}
+
+function buildDesignExecutiveSummary(
+  review: ReviewContext,
+  level: DesignLevel,
+  critical: Finding[],
+  suggestions: Finding[],
+): string {
+  const issueCount = critical.length + suggestions.length;
+  const target = review.content.title || review.target.label;
+  return `${target} reads like an ${level} system design submission overall. The proposal has the right problem framing, but the review still surfaced ${issueCount} material architecture concerns that affect scalability, reliability, or operating clarity.`;
+}
+
+function deriveDesignHiringRecommendation(
+  level: DesignLevel,
+  recommendation: ReviewRecommendation,
+  critical: Finding[],
+): string {
+  if (recommendation === 'request-changes') {
+    return critical.length >= 3 ? 'No' : 'Lean no';
+  }
+  if (level === 'E7') return 'Strong yes';
+  if (level === 'E6') return 'Yes';
+  if (level === 'E5') return recommendation === 'approve' ? 'Lean yes' : 'Lean no';
+  return 'Lean no';
+}
+
+function rankDesignFindings(critical: Finding[], suggestions: Finding[]): Finding[] {
+  const severityOrder: Record<FindingSeverity, number> = {
+    critical: 4,
+    high: 3,
+    medium: 2,
+    low: 1,
+    info: 0,
+  };
+
+  return [...critical, ...suggestions].sort((left, right) => {
+    const severityDelta = severityOrder[right.severity] - severityOrder[left.severity];
+    if (severityDelta !== 0) return severityDelta;
+    return right.confidence - left.confidence;
+  });
+}
+
+function selectDesignFindings(
+  critical: Finding[],
+  suggestions: Finding[],
+  keywords: string[],
+  preferredCategories: Array<Finding['category']>,
+): Finding[] {
+  const matches = rankDesignFindings(critical, suggestions).filter((finding) => {
+    const haystack = `${finding.title} ${finding.description} ${finding.suggestion || ''}`.toLowerCase();
+    return keywords.some(keyword => haystack.includes(keyword))
+      || preferredCategories.includes(finding.category);
+  });
+
+  return dedupeFindings(matches).slice(0, 3);
+}
+
+function formatDesignFindingParagraph(prefix: string, findings: Finding[]): string {
+  return `${prefix} ${findings.map(formatDesignFindingSnippet).join('; ')}.`;
+}
+
+function formatDesignFindingSnippet(finding: Finding): string {
+  const location = finding.file ? ` (${finding.file}${finding.line ? `:${finding.line}` : ''})` : '';
+  return `${finding.title}${location}: ${finding.suggestion || finding.description}`;
+}
+
+function dedupeFindings(findings: Finding[]): Finding[] {
+  const seen = new Set<string>();
+  const result: Finding[] = [];
+
+  for (const finding of findings) {
+    const key = finding.title.trim().toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(finding);
+  }
+
+  return result;
+}
+
+function dedupeStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(trimmed);
+  }
+
+  return result;
+}
+
+function normalizedTokenOverlap(left: string, right: string): number {
+  const leftTokens = tokenizeForSimilarity(left);
+  const rightTokens = tokenizeForSimilarity(right);
+
+  if (leftTokens.size === 0 || rightTokens.size === 0) {
+    return 0;
+  }
+
+  let overlap = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) {
+      overlap++;
+    }
+  }
+
+  return overlap / Math.max(leftTokens.size, rightTokens.size);
+}
+
+function tokenizeForSimilarity(text: string): Set<string> {
+  const stopwords = new Set([
+    'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'your',
+    'have', 'will', 'would', 'should', 'could', 'does', 'did', 'are',
+    'but', 'not', 'too', 'very', 'more', 'than', 'then', 'when', 'where',
+    'what', 'why', 'how', 'its', 'their', 'about', 'across', 'under',
+  ]);
+
+  return new Set(
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .map(token => token.trim())
+      .filter(token => token.length >= 4 && !stopwords.has(token)),
+  );
 }
 
 // ============================================================================

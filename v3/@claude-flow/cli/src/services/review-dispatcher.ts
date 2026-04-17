@@ -20,7 +20,11 @@ import type {
   FindingSeverity,
   DebatePosition,
 } from './review-types.js';
-import { DEFAULT_DISPATCH_CONFIG } from './review-types.js';
+import {
+  DEFAULT_DISPATCH_CONFIG,
+  getAgentRolesForProfile,
+  getReviewProfile,
+} from './review-types.js';
 
 // ============================================================================
 // ReviewDispatcher
@@ -66,7 +70,9 @@ export class ReviewDispatcher extends EventEmitter {
     this.registerCleanup();
 
     const agents: AgentProcess[] = [];
-    const roles: AgentRole[] = ['security-auditor', 'logic-checker', 'integration-specialist'];
+    const roles: AgentRole[] = getAgentRolesForProfile(
+      review.profile || getReviewProfile(review.target),
+    );
     const startTime = Date.now();
 
     for (const role of roles) {
@@ -221,7 +227,9 @@ export class ReviewDispatcher extends EventEmitter {
     round: number,
     review: ReviewContext,
   ): DebatePosition[] {
-    const roles = ['security-auditor', 'logic-checker', 'integration-specialist'];
+    const roles = getAgentRolesForProfile(
+      review.profile || getReviewProfile(review.target),
+    );
     const positions: DebatePosition[] = [];
 
     for (const role of roles) {
@@ -300,12 +308,17 @@ export class ReviewDispatcher extends EventEmitter {
     dualMode: boolean,
   ): Promise<string> {
     const promptParts: string[] = [];
+    const systemDesign = (review.profile || getReviewProfile(review.target)) === 'system-design';
 
     // Header
     if (dualMode) {
-      promptParts.push(this.buildDualModeQueenHeader());
+      promptParts.push(systemDesign
+        ? this.buildDualModeSystemDesignQueenHeader()
+        : this.buildDualModeQueenHeader());
     } else {
-      promptParts.push(this.buildSingleModeQueenHeader());
+      promptParts.push(systemDesign
+        ? this.buildSingleModeSystemDesignQueenHeader()
+        : this.buildSingleModeQueenHeader());
     }
 
     // Review context
@@ -527,6 +540,50 @@ Each role was assigned to both models. Your job:
 `;
   }
 
+  private buildDualModeSystemDesignQueenHeader(): string {
+    return `You are the Queen Reviewer running a dual-model AI Consortium system design review.
+Agents from two model families (Claude Opus and Codex GPT 5.4) independently reviewed the same architecture/system design prompt.
+Each role was assigned to both models. Your job:
+
+Use skill: $agent-arch-system-design.
+
+1. Compare the two system-architect reviews and reconcile disagreements.
+2. Produce a candid, interviewer-quality evaluation of the design.
+3. Judge the engineer's demonstrated level using big-tech style levels: E4, E5, E6, E7.
+
+Print ONLY a markdown report in this format:
+
+# AI Consortium System Design Review
+
+## Executive Summary
+2-4 sentences on overall quality of the design
+
+## Architecture Strengths
+Bullet list of the best decisions
+
+## Critical Gaps
+Bullet list of the biggest missing or weak areas
+
+## Scalability And Concurrency Review
+Assessment of throughput model, fanout, bottlenecks, queueing, backpressure, rate limits, and failure isolation
+
+## Reliability And Operations Review
+Assessment of resilience, observability, rollout, cost, debugging, and operability
+
+## Cross-Model Notes
+Where Claude and Codex agreed or disagreed
+
+## Level Assessment
+- Level: E4 | E5 | E6 | E7
+- Confidence: high | medium | low
+- Rationale: concise evidence-backed explanation
+
+## Hiring Recommendation
+Strong no / No / Lean no / Lean yes / Yes / Strong yes
+
+Be direct. Treat this like a high-profile system design interview, not a code review.`;
+  }
+
   private buildSingleModeQueenHeader(): string {
     return `You are the Queen Reviewer running an AI Consortium review.
 Specialist agents have independently reviewed the same input. Your job:
@@ -562,6 +619,42 @@ Print ONLY the report.
 
 ---
 `;
+  }
+
+  private buildSingleModeSystemDesignQueenHeader(): string {
+    return `You are the Queen Reviewer running an AI Consortium system design review.
+Specialist system-design reviewers have independently reviewed the same architecture proposal.
+
+Use skill: $agent-arch-system-design.
+
+Your job:
+1. Synthesize the findings into a clear interviewer-style evaluation.
+2. Highlight the strongest design decisions and the highest-risk omissions.
+3. Judge the engineer's demonstrated level using big-tech style levels: E4, E5, E6, E7.
+
+Print ONLY a markdown report in this format:
+
+# AI Consortium System Design Review
+
+## Executive Summary
+
+## Architecture Strengths
+
+## Critical Gaps
+
+## Scalability And Concurrency Review
+
+## Reliability And Operations Review
+
+## Level Assessment
+- Level: E4 | E5 | E6 | E7
+- Confidence: high | medium | low
+- Rationale: concise evidence-backed explanation
+
+## Hiring Recommendation
+Strong no / No / Lean no / Lean yes / Yes / Strong yes
+
+Be direct and candid. This is a system design interview assessment.`;
   }
 
   private buildReviewContext(review: ReviewContext): string {
